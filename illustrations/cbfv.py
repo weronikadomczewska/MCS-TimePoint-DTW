@@ -30,7 +30,7 @@ plt.plot(t * 1000, signal_cbfv, color="#8B0000", linewidth=2.5, label="CBFV wave
 peaks_t = [0.1, 0.25, 0.45]  # Time in seconds
 labels = ["F1 (PSV)", "F2", "F3"]
 
-for p, l in zip(peaks_t, labels):
+for p, l in zip(peaks_t, labels):  # noqa
     # Find exact Y value at given Time
     idx = np.argmin(np.abs(t - p))
     y = signal_cbfv[idx]
