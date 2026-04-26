@@ -209,3 +209,7 @@ __marimo__/
 config/
 
 img/
+
+.DS_Store
+
+libcpab/
