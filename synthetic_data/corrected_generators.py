@@ -2,13 +2,13 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
+import os
 
 
+# =========================
+# TIMELINE
+# =========================
 class TimelineGenerator:
-    """
-    Generates shared timeline for ABP and CBFV signals.
-    """
-
     def __init__(self, duration, min_hr=60, max_hr=90):
         self.duration = duration
         self.min_hr = min_hr
@@ -23,30 +23,44 @@ class TimelineGenerator:
 
         while t < self.duration:
             interval = avg_interval + np.random.normal(0, 0.05)
-            t += interval
+            t += max(interval, 0.3)  # avoid negative/too small intervals
             times.append(t)
 
         return np.array(times)
 
 
+# =========================
+# ABP GENERATOR
+# =========================
 class ABPGenerator:
-    """
-    Generates ABP signal as 3 Gaussian functions.
-    Liu et al.
-    """
-
-    def __init__(self, fs):
+    def __init__(self, fs, params=None):
         self.fs = fs
+        self.params = params
 
     def gaussian(self, t, a, b, c):
         return a * np.exp(-((t - b) ** 2) / (2 * c**2))
 
     def generate_wave(self, t_local):
-        params = [
-            (40, 0.25, 0.05),
-            (20, 0.35, 0.07),
-            (10, 0.45, 0.1),
-        ]
+        if self.params is None:
+            params = [
+                (
+                    np.random.uniform(30, 50),
+                    np.random.uniform(0.2, 0.3),
+                    np.random.uniform(0.04, 0.08),
+                ),
+                (
+                    np.random.uniform(10, 25),
+                    np.random.uniform(0.3, 0.4),
+                    np.random.uniform(0.05, 0.1),
+                ),
+                (
+                    np.random.uniform(5, 15),
+                    np.random.uniform(0.4, 0.55),
+                    np.random.uniform(0.08, 0.15),
+                ),
+            ]
+        else:
+            params = self.params
 
         wave = np.zeros_like(t_local)
         for a, b, c in params:
@@ -55,25 +69,22 @@ class ABPGenerator:
         return wave
 
 
+# =========================
+# CA MODEL
+# =========================
 class CAModel:
-    """
-
-    Mahdi et al.
-    """
-
-    def __init__(self, dt):
+    def __init__(self, dt, a=None, b=None, c=None, d=None, M=None):
         self.dt = dt
 
-        self.a = 0.25
-        self.b = 0.1
-        self.c = 0.9
-        self.M = 1.0
-        self.d = 0.05
+        self.a = a if a is not None else np.random.uniform(0.2, 0.4)
+        self.b = b if b is not None else np.random.uniform(0.05, 0.2)
+        self.c = c if c is not None else np.random.uniform(0.7, 1.2)
+        self.d = d if d is not None else np.random.uniform(0.01, 0.1)
+        self.M = M if M is not None else np.random.uniform(0.8, 1.5)
 
         self.v1 = 0.0
         self.v2 = 0.0
-
-        self.V_bas = 50.0
+        self.V_bas = np.random.uniform(40, 70)
 
     def step(self, p):
         dv1 = (
@@ -95,58 +106,77 @@ class CAModel:
 # MAIN GENERATOR
 # =========================
 class CBFVSignalGenerator:
-    """
-    Mahdi et al.
-    """
-
-    def __init__(self, fs=100, duration=10):
+    def __init__(
+        self,
+        fs=100,
+        duration=10,
+        hr_range=None,
+        noise_std=None,
+        ca_params=None,
+        abp_params=None,
+    ):
         self.fs = fs
         self.duration = duration
 
-        self.timeline = TimelineGenerator(duration)
-        self.abp_gen = ABPGenerator(fs)
+        self.hr_range = hr_range if hr_range else (55, 110)
+        self.noise_std = noise_std
+
+        self.abp_gen = ABPGenerator(fs, params=abp_params)
+        self.ca_params = ca_params
+
+        # FIX: initialize timeline
+        self.timeline = TimelineGenerator(
+            duration=duration, min_hr=self.hr_range[0], max_hr=self.hr_range[1]
+        )
 
     def generate(self):
         t = np.linspace(0, self.duration, int(self.duration * self.fs))
-
         abp = np.zeros_like(t)
 
         beats = self.timeline.generate()
 
-        # --- ABP generation ---
+        # --- ABP ---
         for i, bt in enumerate(beats):
             next_bt = beats[i + 1] if i < len(beats) - 1 else self.duration
-            dt = next_bt - bt
+            dt = max(next_bt - bt, 1e-3)
 
-            t_local = t - bt
             mask = (t >= bt) & (t < next_bt)
 
-            t_norm = t_local / dt
-            t_norm[~mask] = 0
+            t_local = (t[mask] - bt) / dt
 
-            wave = self.abp_gen.generate_wave(t_norm)
+            wave = self.abp_gen.generate_wave(t_local)
 
-            # baseline change (orthostatic stress)
-            if bt < self.duration / 2:
-                baseline = 80
-            else:
-                baseline = 60
+            baseline = 80 if bt < self.duration / 2 else 60
+            abp[mask] += wave + baseline
 
-            abp[mask] += wave[mask] + baseline
+        # --- noise (random per sample) ---
+        if self.noise_std is None:
+            abp_noise = np.random.uniform(1.0, 3.0)
+            cbfv_noise = np.random.uniform(1.5, 4.0)
+        else:
+            abp_noise, cbfv_noise = self.noise_std
 
-        # noise from normal distribution
-        abp += np.random.normal(0, 1.5, len(abp))
+        abp += np.random.normal(0, abp_noise, len(abp))
 
-        # --- CBFV generation FROM ABP ---
-        ca = CAModel(dt=1 / self.fs)
+        # --- CBFV ---
+        ca = CAModel(dt=1 / self.fs, **(self.ca_params if self.ca_params else {}))
         cbfv = np.zeros_like(abp)
 
         for i in range(len(abp)):
             cbfv[i] = ca.step(abp[i])
 
-        cbfv += np.random.normal(0, 2.0, len(cbfv))
+        cbfv += np.random.normal(0, cbfv_noise, len(cbfv))
 
         return t, abp, cbfv
+
+
+# =========================
+# KEYPOINTS
+# =========================
+def extract_keypoints(signal, fs):
+    peaks, _ = find_peaks(signal, distance=int(fs * 0.4))
+    troughs, _ = find_peaks(-signal, distance=int(fs * 0.4))
+    return np.sort(np.concatenate([peaks, troughs]))
 
 
 # =========================
@@ -155,78 +185,71 @@ class CBFVSignalGenerator:
 def plot_signals(t, abp, cbfv, abp_kp=None, cbfv_kp=None):
     fig, ax1 = plt.subplots(figsize=(12, 5))
 
-    # --- ABP ---
-    ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("ABP (mmHg)", color="red")
-    (line_abp,) = ax1.plot(t, abp, color="red", alpha=0.7, label="ABP")
-
+    ax1.plot(t, abp, color="red", label="ABP")
     if abp_kp is not None:
-        ax1.scatter(
-            t[abp_kp],
-            abp[abp_kp],
-            color="darkred",
-            s=30,
-            label="ABP keypoints",
-            zorder=5,
-        )
+        ax1.scatter(t[abp_kp], abp[abp_kp], color="darkred", s=30)
 
-    ax1.tick_params(axis="y", labelcolor="red")
-
-    # --- CBFV ---
     ax2 = ax1.twinx()
-    ax2.set_ylabel("CBFV (cm/s)", color="blue")
-    (line_cbfv,) = ax2.plot(t, cbfv, color="blue", alpha=0.7, label="CBFV")
-
+    ax2.plot(t, cbfv, color="blue", label="CBFV")
     if cbfv_kp is not None:
-        ax2.scatter(
-            t[cbfv_kp],
-            cbfv[cbfv_kp],
-            color="navy",
-            s=30,
-            label="CBFV keypoints",
-            zorder=5,
-        )
+        ax2.scatter(t[cbfv_kp], cbfv[cbfv_kp], color="navy", s=30)
 
-    ax2.tick_params(axis="y", labelcolor="blue")
-
-    # --- Combined legend ---
-    handles = [line_abp, line_cbfv]
-    labels = ["ABP", "CBFV"]
-
-    if abp_kp is not None:
-        handles.append(
-            plt.Line2D([], [], marker="o", color="darkred", linestyle="None")
-        )
-        labels.append("ABP keypoints")
-
-    if cbfv_kp is not None:
-        handles.append(plt.Line2D([], [], marker="o", color="navy", linestyle="None"))
-        labels.append("CBFV keypoints")
-
-    ax1.legend(handles, labels, loc="upper right")
-
-    plt.title("ABP → CBFV with extracted keypoints")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+    plt.title("ABP → CBFV with keypoints")
+    plt.grid(True)
     plt.show()
 
 
-def extract_keypoints(signal, fs):
-    """
-    https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html
-    """
-    peaks, _ = find_peaks(signal, distance=int(fs * 0.4))
-    troughs, _ = find_peaks(-signal, distance=int(fs * 0.4))
+# =========================
+# DATASET
+# =========================
+def generate_dataset(n_samples=5000, save_dir="data", fs=100, duration=10):
+    os.makedirs(save_dir, exist_ok=True)
 
-    keypoints = np.sort(np.concatenate([peaks, troughs]))
-    return keypoints
+    gen = CBFVSignalGenerator(fs=fs, duration=duration)
+
+    for i in range(n_samples):
+        t, abp, cbfv = gen.generate()
+
+        abp_kp = extract_keypoints(abp, fs)
+        cbfv_kp = extract_keypoints(cbfv, fs)
+
+        np.savez_compressed(
+            os.path.join(save_dir, f"sample_{i}.npz"),
+            t=t,
+            abp=abp,
+            cbfv=cbfv,
+            abp_kp=abp_kp,
+            cbfv_kp=cbfv_kp,
+        )
+
+        if i % 100 == 0:
+            print(f"Generated {i}/{n_samples}")
 
 
+# =========================
+# MAIN
+# =========================
 if __name__ == "__main__":
-    gen = CBFVSignalGenerator(fs=100, duration=10)
-    t, abp, cbfv = gen.generate()
+    # generate_dataset(n_samples=5, duration=10)
 
-    abp_kp = extract_keypoints(abp, fs=100)
-    cbfv_kp = extract_keypoints(cbfv, fs=100)
+    # quick test
+    # gen = CBFVSignalGenerator()
+    # t, abp, cbfv = gen.generate()
+    # plot_signals(t, abp, cbfv,
+    #              extract_keypoints(abp, 100),
+    #              extract_keypoints(cbfv, 100))
 
-    plot_signals(t, abp, cbfv, abp_kp, cbfv_kp)
+    data = np.load("data/sample_1.npz")
+
+    t = data["t"]
+    abp = data["abp"]
+    cbfv = data["cbfv"]
+    abp_kp = data["abp_kp"]
+    cbfv_kp = data["cbfv_kp"]
+
+    plot_signals(
+        t, abp, cbfv, extract_keypoints(abp, 100), extract_keypoints(cbfv, 100)
+    )
+
+    print(abp.shape)
+    print(abp_kp[:10])
