@@ -4,6 +4,10 @@ import matplotlib.pyplot as plt
 
 
 class TimelineGenerator:
+    """
+    Generates shared timeline for ABP and CBFV signals.
+    """
+
     def __init__(self, duration: int, min_hr: int = 60, max_hr: int = 90):
         self.duration = duration  # Duration of the signal in seconds
         self.min_hr = min_hr
@@ -22,14 +26,14 @@ class TimelineGenerator:
         hrv_noise = np.random.normal(0, hrv_std, num_beats)
         return avg_interval + hrv_noise
 
-    def generate_heartbeats_timeline(self, duration: int, mean_hr: int) -> np.ndarray:
+    def generate_heartbeats_timeline(self, mean_hr: int) -> np.ndarray:
         """
         Generates a timeline of heartbeats based on the specified duration and average heart rate.
         """
-        num_beats = int((duration / 60.0) * mean_hr)
+        num_beats = int((self.duration / 60.0) * mean_hr) + 5  # adding spare signals
         hrv_noise = self._generate_hrv_noise(num_beats, mean_hr)
         beat_times = np.cumsum(hrv_noise)
-        return beat_times[beat_times < duration]
+        return beat_times[beat_times < self.duration]
 
 
 class PhysiologicalSignalGenerator:
@@ -40,37 +44,47 @@ class PhysiologicalSignalGenerator:
         self.duration = duration
         self.min_hr = min_hr
         self.max_hr = max_hr
+        self.timeline_gen = TimelineGenerator(
+            duration=duration, min_hr=min_hr, max_hr=max_hr
+        )
 
     def _generate_heartbeats_timeline(
         self, mean_hr: int = 60, min_hr: int = 60, max_hr: int = 90
     ) -> np.ndarray:
         """Generates a timeline of heartbeats (with HRV) based on the average heart rate."""
-        timeline_gen = TimelineGenerator(self.duration, min_hr, max_hr)
-        return timeline_gen.generate_heartbeats_timeline(self.duration, mean_hr)
+        return self.timeline_gen.generate_heartbeats_timeline(mean_hr)
 
-    def gaussian_component(self, n, fs, a, b, c):
+    def gaussian_component(self, t, a, b, c):
         """
-        Computes a single Gaussian kernel function exactly as described in the article.
-        Formula: a * exp(- ((n/fs - b)^2) / (2 * c^2))
+        Computes a single Gaussian kernel function.
+        Wektor 't' jest już w sekundach, więc nie dzielimy przez fs!
+        Formula: a * exp(- ((t - b)^2) / (2 * c^2))
         """
-        return a * np.exp(-((n / fs - b) ** 2) / (2 * c**2))
+        return a * np.exp(-((t - b) ** 2) / (2 * c**2))
 
-    def lognorm_component(self, n, fs, a, b, c):
+    def lognorm_component(self, t, a, b, c):
         """
-        Computes a single Log-Normal kernel function as described in the article.
-        Formula: a * (1 / (n/fs * c * sqrt(2*pi))) * exp(- (log(n/fs) - b)^2 / (2 * c^2))
+        Bezpieczna funkcja rozkładu log-normalnego dla szeregów czasowych.
+        t: czas lokalny (t - beat_time)
+        a: amplituda (wysokość piku)
+        b: parametr mu (przesunięcie w skali logarytmicznej)
+        c: parametr sigma (szerokość i asymetria fali)
         """
-        with np.errstate(divide="ignore", invalid="ignore"):
-            log_term = np.log(n / fs)
-            exponent = -((log_term - b) ** 2) / (2 * c**2)
-            lognorm_value = (
-                a * (1 / (n / fs * c * np.sqrt(2 * np.pi))) * np.exp(exponent)
-            )
-            lognorm_value[n <= 0] = 0  # Ensure non-negative values for n <= 0
-            return lognorm_value
+        # Przygotowujemy pustą falę samych zer o odpowiednim rozmiarze
+        wave = np.zeros_like(t)
+
+        # Wybieramy TYLKO te indeksy, gdzie czas jest dodatni (po uderzeniu serca)
+        # Używamy drobnego marginesu 1e-6, żeby uniknąć np.log(0)
+        valid = t > 1e-6
+
+        # Obliczamy falę Log-Normal tylko na wycinku z dodatnim czasem.
+        # Wzór: a * exp( - (ln(t) - b)^2 / (2 * c^2) )
+        wave[valid] = a * np.exp(-((np.log(t[valid]) - b) ** 2) / (2 * c**2))
+
+        return wave
 
     def get_abp_wave(self, t_local):
-        """Returns a single ABP wave based on a mixture of Gaussian and Log-Normal components."""
+        """Returns a single ABP wave based on a mixture on Gaussian components."""
         # Parameters for typical 120/80 mmHg pressure wave
         gaussian_params = [
             (40, 0.25, 0.05),  # Systolic peak
@@ -80,11 +94,11 @@ class PhysiologicalSignalGenerator:
 
         abp_wave = np.zeros_like(t_local)
         for a, b, c in gaussian_params:
-            abp_wave += self.gaussian_component(t_local, self.fs, a, b, c)
+            abp_wave += self.gaussian_component(t_local, a, b, c)
         return abp_wave
 
     def get_cbfv_wave(self, t_local):
-        """Returns a single CBFV wave based on a mixture of Gaussian and Log-Normal components."""
+        """Returns a single CBFV wave based on Log-Normal components."""
         # Parameters for typical 80/40 cm/s flow wave
         lognorm_params = [
             (25, -1.2, 0.25),  # Rapid rise
@@ -93,43 +107,53 @@ class PhysiologicalSignalGenerator:
 
         cbfv_wave = np.zeros_like(t_local)
         for a, b, c in lognorm_params:
-            cbfv_wave += self.lognorm_component(t_local, self.fs, a, b, c)
+            cbfv_wave += self.lognorm_component(t_local, a, b, c)
         return cbfv_wave
 
     def generate_window(self):
         """Main function that generates the ABP and CBFV signals along with their keypoints."""
+        # 1. Wektor ZDARZEŃ (ok. 29 elementów - same sekundy uderzeń)
         heartbeats = self._generate_heartbeats_timeline()
 
-        abp_signal = np.full_like(heartbeats, 80.0)  # Baseline (diastolic)
-        cbfv_signal = np.full_like(heartbeats, 40.0)  # Baseline
+        # 2. Ciągła OŚ CZASU (3000 elementów dla 30s przy 100Hz)
+        total_samples = self.duration * self.fs
+        t = np.linspace(0, self.duration, total_samples, endpoint=False)
+
+        # 3. Sygnały inicjujemy na bazie osi czasu (mają po 3000 elementów)
+        abp_signal = np.full_like(t, 80.0)  # Baseline (diastolic)
+        cbfv_signal = np.full_like(t, 40.0)  # Baseline
 
         abp_keypoints = []
         cbfv_keypoints = []
 
-        delay_cbfv = (
-            0.1  # Delay of blood flow to the brain relative to the aorta (e.g., 100 ms)
-        )
+        delay_cbfv = 0.1  # Delay of blood flow
 
+        # 4. Dodajemy fale Gaussa używając gęstej osi 't'
         for beat_time in heartbeats:
-            abp_wave = self.get_abp_wave(heartbeats - beat_time)
+            abp_wave = self.get_abp_wave(t - beat_time)
             abp_signal += abp_wave
             abp_keypoints.append(int((beat_time + 0.25) * self.fs))  # Systolic peak
 
-            cbfv_wave = self.get_cbfv_wave(heartbeats - (beat_time + delay_cbfv))
+            cbfv_wave = self.get_cbfv_wave(t - (beat_time + delay_cbfv))
             cbfv_signal += cbfv_wave
             cbfv_keypoints.append(
                 int((beat_time + delay_cbfv + 0.20) * self.fs)
             )  # CBFV peak
 
-        # Add measurement noise
+        # 5. Szum pomiarowy dla całych 3000 elementów
         abp_signal += np.random.normal(0, 1.5, len(abp_signal))
         cbfv_signal += np.random.normal(0, 2.0, len(cbfv_signal))
 
+        # 6. ZABEZPIECZENIE (Rozwiązuje IndexError przy rysowaniu)
+        max_idx = len(abp_signal)
+        abp_keypoints_safe = [kp for kp in abp_keypoints if kp < max_idx]
+        cbfv_keypoints_safe = [kp for kp in cbfv_keypoints if kp < max_idx]
+
         return (
             abp_signal,
-            np.array(abp_keypoints),
+            np.array(abp_keypoints_safe),
             cbfv_signal,
-            np.array(cbfv_keypoints),
+            np.array(cbfv_keypoints_safe),
         )
 
     def visualize_signals(self, abp_signal, abp_keypoints, cbfv_signal, cbfv_keypoints):
@@ -169,9 +193,9 @@ class PhysiologicalSignalGenerator:
         plt.show()
 
 
-if __name__ == "__main__":
-    signal_gen = PhysiologicalSignalGenerator(fs=100, duration=30, min_hr=60, max_hr=90)
-    abp_signal, abp_keypoints, cbfv_signal, cbfv_keypoints = (
-        signal_gen.generate_window()
-    )
-    signal_gen.visualize_signals(abp_signal, abp_keypoints, cbfv_signal, cbfv_keypoints)
+# if __name__ == "__main__":
+#     signal_gen = PhysiologicalSignalGenerator(fs=100, duration=10, min_hr=60, max_hr=90)
+#     abp_signal, abp_keypoints, cbfv_signal, cbfv_keypoints = (
+#         signal_gen.generate_window()
+#     )
+#     signal_gen.visualize_signals(abp_signal, abp_keypoints, cbfv_signal, cbfv_keypoints)
