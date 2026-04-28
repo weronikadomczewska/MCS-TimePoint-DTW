@@ -17,6 +17,14 @@ from scipy.signal import find_peaks
 from signal_generators import CBFVSignalGenerator
 from cpab import CPABWarper
 
+from scipy.signal import butter, filtfilt
+
+def highpass_filter(signal, fs, cutoff=0.5, order=3):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype="high", analog=False)
+    return filtfilt(b, a, signal)
+
 
 def extract_keypoints(signal, fs):
     peaks, _ = find_peaks(signal, distance=int(fs * 0.4))
@@ -90,15 +98,26 @@ def generate_cpab_dataset(
     for i in range(n_samples):
         t, abp, cbfv, metadata = generator.generate()
 
-        # --- 2. Extract keypoints ---
-        abp_kp = extract_keypoints(abp, fs)
-        cbfv_kp = extract_keypoints(cbfv, fs)
+        # --- FILTER ---
+        abp_filt = highpass_filter(abp, fs).copy()
+        cbfv_filt = highpass_filter(cbfv, fs).copy()
+
+        # --- KEYPOINTS ON FILTERED ---
+        abp_kp = extract_keypoints(abp_filt, fs)
+        cbfv_kp = extract_keypoints(cbfv_filt, fs)
+
+        # # --- 2. Extract keypoints ---
+        # abp_kp = extract_keypoints(abp, fs)
+        # cbfv_kp = extract_keypoints(cbfv, fs)
 
         # --- 3. CPAB transform (SAME theta!) ---
         theta = warper.sample_theta()
 
-        abp_warped, grid_t = warper.warp(abp, theta)
-        cbfv_warped, _ = warper.warp(cbfv, theta)
+        abp_warped, grid_t = warper.warp(abp_filt, theta)
+        cbfv_warped, _ = warper.warp(cbfv_filt, theta)
+
+        # abp_warped, grid_t = warper.warp(abp, theta)
+        # cbfv_warped, _ = warper.warp(cbfv, theta)
 
         abp_kp_warped = warper.warp_keypoints(abp_kp, grid_t, len(abp))
         cbfv_kp_warped = warper.warp_keypoints(cbfv_kp, grid_t, len(cbfv))
@@ -108,8 +127,8 @@ def generate_cpab_dataset(
             os.path.join(save_dir, f"sample_{i}.npz"),
             # signals
             t=t,
-            abp=abp,
-            cbfv=cbfv,
+            abp=abp_filt,
+            cbfv=cbfv_filt,
             abp_warped=abp_warped,
             cbfv_warped=cbfv_warped,
             # keypoints
