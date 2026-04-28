@@ -1,8 +1,10 @@
 import torch
 
+
 def _patched_solve(B, A):
     X = torch.linalg.solve(A, B)
-    return X, None   
+    return X, None
+
 
 torch.solve = _patched_solve
 
@@ -32,7 +34,7 @@ def plot_all(
     abp_kp_warped,
     cbfv_kp,
     cbfv_kp_warped,
-    save_path=None
+    save_path=None,
 ):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
 
@@ -41,8 +43,7 @@ def plot_all(
     ax1.plot(t, abp_warped, color="darkred", alpha=0.6, label="ABP warped")
 
     ax1.scatter(t[abp_kp], abp[abp_kp], color="black", s=15)
-    ax1.scatter(t[abp_kp_warped], abp_warped[abp_kp_warped],
-                color="gray", s=15)
+    ax1.scatter(t[abp_kp_warped], abp_warped[abp_kp_warped], color="gray", s=15)
 
     ax1.set_ylabel("ABP (mmHg)")
     ax1.set_title("ABP")
@@ -54,8 +55,7 @@ def plot_all(
     ax2.plot(t, cbfv_warped, color="navy", alpha=0.6, label="CBFV warped")
 
     ax2.scatter(t[cbfv_kp], cbfv[cbfv_kp], color="black", s=15)
-    ax2.scatter(t[cbfv_kp_warped], cbfv_warped[cbfv_kp_warped],
-                color="gray", s=15)
+    ax2.scatter(t[cbfv_kp_warped], cbfv_warped[cbfv_kp_warped], color="gray", s=15)
 
     ax2.set_ylabel("CBFV (cm/s)")
     ax2.set_xlabel("Time (s)")
@@ -78,7 +78,7 @@ def generate_cpab_dataset(
     plot_dir="plots_cpab",
     fs=100,
     duration=10,
-    save_plots=True
+    save_plots=True,
 ):
     os.makedirs(save_dir, exist_ok=True)
     if save_plots:
@@ -88,7 +88,6 @@ def generate_cpab_dataset(
     warper = CPABWarper(tess_size=[16])
 
     for i in range(n_samples):
-
         t, abp, cbfv, metadata = generator.generate()
 
         # --- 2. Extract keypoints ---
@@ -107,26 +106,22 @@ def generate_cpab_dataset(
         # --- 4. Save ---
         np.savez_compressed(
             os.path.join(save_dir, f"sample_{i}.npz"),
-
             # signals
             t=t,
             abp=abp,
             cbfv=cbfv,
             abp_warped=abp_warped,
             cbfv_warped=cbfv_warped,
-
             # keypoints
             abp_kp=abp_kp,
             cbfv_kp=cbfv_kp,
             abp_kp_warped=abp_kp_warped,
             cbfv_kp_warped=cbfv_kp_warped,
-
             # cpab
             theta=theta.squeeze().cpu().numpy(),
             grid_t=grid_t.squeeze().cpu().numpy(),
-
             # metadata
-            metadata=str(metadata)
+            metadata=str(metadata),
         )
 
         # --- 5. Plot ---
@@ -141,7 +136,7 @@ def generate_cpab_dataset(
                 abp_kp_warped,
                 cbfv_kp,
                 cbfv_kp_warped,
-                save_path=os.path.join(plot_dir, f"sample_{i}.png")
+                save_path=os.path.join(plot_dir, f"sample_{i}.png"),
             )
 
         if i % 100 == 0:
@@ -152,9 +147,5 @@ def generate_cpab_dataset(
 
 if __name__ == "__main__":
     generate_cpab_dataset(
-        n_samples=5,
-        save_dir="data_cpab",
-        plot_dir="plots_cpab",
-        fs=100,
-        duration=10
+        n_samples=10, save_dir="data_cpab", plot_dir="plots_cpab", fs=100, duration=10
     )

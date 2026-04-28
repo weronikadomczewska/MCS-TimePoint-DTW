@@ -1,56 +1,95 @@
-import torch
-import torch.nn.functional as F
-import librosa  # pip install librosa
-from utils.timepoint_utils import apply_nms_and_select
+from dtaidistance import dtw
+from scipy.stats import zscore
+import numpy as np
+import matplotlib.pyplot as plt
 
+def analyze_dtw_morphological_delay(abp_signal, cbfv_signal, fs=100):
+    # Normalisation - different units
+    abp_norm = zscore(abp_signal)
+    cbfv_norm = zscore(cbfv_signal)
+    
+    # 2. Sakoe-Chiba window DTW
+    window_size = int(0.5 * fs) 
+    
+    distance, paths = dtw.warping_paths(abp_norm, cbfv_norm, window=window_size)
+    best_path = dtw.best_path(paths)
+    
+    path_diffs = []
+    for i, j in best_path:
 
-def align_signals_with_timepoint(model, signal_ABP, signal_CBFV, threshold=0.5):
+        diff_seconds = (j - i) / fs
+        path_diffs.append(diff_seconds)
+        
+    path_diffs = np.array(path_diffs)
+    
+    mean_dtw_delay = np.mean(path_diffs)
+    std_dtw_delay = np.std(path_diffs)
+    
+    return path_diffs, mean_dtw_delay, std_dtw_delay
+
+def plot_delay_trend(window_times, mean_delays, std_delays=None, event_times=None):
     """
-    Wykonuje pełen proces dopasowania TimePoint DTW na dwóch sygnałach.
+    Rysuje wykres trendu opóźnienia ABP-CBFV w trakcie dłuższego badania.
+    
+    :param window_times: Czas środka każdego analizowanego okna (oś X)
+    :param mean_delays: Średnie opóźnienie DTW dla danego okna w sekundach
+    :param std_delays: (Opcjonalnie) Odchylenie standardowe opóźnienia
+    :param event_times: (Opcjonalnie) Lista momentów (w sekundach), kiedy pacjent zmieniał pozycję (np. wstawał)
     """
-    # 1. ZAMROŻENIE MODELU (Bardzo ważne - tryb ewaluacji!)
-    model.eval()
+    fig, ax = plt.subplots(figsize=(12, 5))
 
-    with torch.no_grad():
-        # 2. Przejście przez model
-        # Uwaga: zakładamy wymiary [Batch=1, Channels=1, Length=3000]
-        scores_ABP, _, desc_ABP_dense = model(signal_ABP)
-        scores_CBFV, _, desc_CBFV_dense = model(signal_CBFV)
+    ax.plot(window_times, mean_delays, marker='o', color='purple', linewidth=2, label="Średnie przesunięcie (Delay)")
 
-        # 3. Ekstrakcja Punktów Kluczowych (NMS)
-        # Używamy funkcji, którą napisaliśmy wcześniej
-        mask_ABP, _ = apply_nms_and_select(scores_ABP, threshold=threshold)
-        mask_CBFV, _ = apply_nms_and_select(scores_CBFV, threshold=threshold)
+    if std_delays is not None:
+        ax.fill_between(window_times, 
+                        np.array(mean_delays) - np.array(std_delays), 
+                        np.array(mean_delays) + np.array(std_delays), 
+                        color='purple', alpha=0.2, label="Zmienność (Std Dev)")
 
-        # Wyciągamy same indeksy w czasie (np. punkt nr 50, 150, 240)
-        kp_ABP = torch.nonzero(mask_ABP[0]).squeeze()
-        kp_CBFV = torch.nonzero(mask_CBFV[0]).squeeze()
+    # position change events
+    if event_times:
+        for et in event_times:
+            ax.axvline(x=et, color='black', linestyle=':', alpha=0.7)
+        # Trik na dodanie tylko jednej legendy dla wszystkich linii pionowych
+        ax.axvline(x=event_times[0], color='black', linestyle=':', alpha=0.7, label="Zmiana pozycji (Sit-to-stand)")
 
-        # 4. Pobranie deskryptorów TYLKO dla punktów kluczowych
-        # Wycinamy odpowiednie kolumny z gęstej macierzy deskryptorów
-        # Otrzymujemy kształty: [N, 256] oraz [M, 256]
-        desc_ABP = desc_ABP_dense[0, :, kp_ABP].T
-        desc_CBFV = desc_CBFV_dense[0, :, kp_CBFV].T
+    ax.set_title("Autoregulation assesment", fontsize=14)
+    ax.set_xlabel("Duration (s)", fontsize=12)
+    ax.set_ylabel("Delay (s)", fontsize=12)
+    
+    ax.axhline(0, color='gray', linewidth=1)
+    
+    ax.legend(loc="upper left")
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
 
-        # 5. OBLICZENIE MACIERZY KOSZTÓW (Cost Matrix)
-        # Ponieważ w treningu używaliśmy podobieństwa kosinusowego,
-        # odległością (kosztem) będzie 1 minus to podobieństwo.
-        desc_ABP_norm = F.normalize(desc_ABP, p=2, dim=-1)
-        desc_CBFV_norm = F.normalize(desc_CBFV, p=2, dim=-1)
 
-        # Mnożenie macierzy: cos_sim = [N, 256] x [256, M] -> [N, M]
-        cos_sim_matrix = torch.mm(desc_ABP_norm, desc_CBFV_norm.T)
-        cost_matrix = (
-            1.0 - cos_sim_matrix
-        )  # Zmiana podobieństwa na koszt (0 = idealne, 2 = tragiczne)
+def plot_dtw_alignment(abp_window, cbfv_window, path, fs=100, title="Wizualizacja przesunięcia DTW (Warping Path)"):
+    """
+    Rysuje dwa sygnały i szare linie łączące odpowiadające sobie punkty według ścieżki DTW.
+    """
+    time_axis = np.arange(len(abp_window)) / fs
 
-        # 6. WYKONANIE ALGORYTMU DTW (za pomocą Librosy)
-        cost_matrix_np = cost_matrix.cpu().numpy()
+    # Normalizacja Z-score tylko do celów wizualizacji (żeby nałożyły się na jednej osi Y)
+    abp_norm = zscore(abp_window)
+    cbfv_norm = zscore(cbfv_window)
 
-        # DTW zwraca D (macierz skumulowanych kosztów) oraz wp (warping path)
-        D, wp = librosa.sequence.dtw(C=cost_matrix_np)
+    fig, ax = plt.subplots(figsize=(12, 5))
 
-        # Librosa zwraca ścieżkę od końca do początku, więc ją odwracamy
-        wp = wp[::-1]
+    ax.plot(time_axis, abp_norm, label='ABP (Wejście)', color='red', linewidth=2)
+    ax.plot(time_axis, cbfv_norm, label='CBFV (Wyjście)', color='blue', linewidth=2)
 
-        return wp, kp_ABP.cpu().numpy(), kp_CBFV.cpu().numpy()
+    for i, j in path[::3]:
+        ax.plot([time_axis[i], time_axis[j]], [abp_norm[i], cbfv_norm[j]], 
+                color='gray', linestyle='--', alpha=0.4)
+
+    ax.set_title(title, fontsize=14)
+    ax.set_xlabel("Czas (s)", fontsize=12)
+    ax.set_ylabel("Znormalizowana Amplituda (Z-score)", fontsize=12)
+    ax.legend(loc="upper right")
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()

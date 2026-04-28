@@ -59,5 +59,5 @@ class NPZLoader(Dataset):
             "x_w": x_w,
             "kp": kp_mask,
             "kp_w": kp_w_mask,
-            "match_mask": match_mask
+            "match_mask": match_mask,
         }

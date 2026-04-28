@@ -17,6 +17,7 @@ class TimePointKeypointLoss(nn.Module):
         loss = self.loss_fn(S_prob, Y_true)
         return loss
 
+
 class TimePointDescriptorLoss(nn.Module):
     def __init__(self, mp=1.0, mn=0.1):
         """
@@ -36,25 +37,26 @@ class TimePointDescriptorLoss(nn.Module):
         returns: scalar loss
         """
 
-        # --- normalize descriptors (IMPORTANT) ---
+        # normalize descriptors
         D = F.normalize(D, p=2, dim=-1)
         D_prime = F.normalize(D_prime, p=2, dim=-1)
 
-        # --- cosine similarity matrix ---
+        # cosine similarity matrix
         # shape: [B, N, N]
         sim = torch.bmm(D, D_prime.transpose(1, 2))
 
-        # --- positive loss ---
+        # positive loss 
         pos_loss = match_mask * (F.relu(self.mp - sim) ** 2)
 
-        # --- negative loss ---
+        # negative loss 
         neg_mask = 1.0 - match_mask
         neg_loss = neg_mask * (F.relu(sim - self.mn) ** 2)
 
-        # --- combine ---
+        # combine 
         loss = pos_loss + neg_loss
 
         return loss.mean()
+
 
 class TimePointOverallLoss(nn.Module):
     def __init__(self, mp=1.0, mn=0.1, lambda_desc=1.0):
@@ -75,7 +77,6 @@ class TimePointOverallLoss(nn.Module):
         D_prime,
         match_mask,
     ):
-
         # Keypoint losses (with sigmoid inside)
         loss_kp_orig = self.kp_loss_fn(S_logits, Y_true)
         loss_kp_warped = self.kp_loss_fn(S_prime_logits, Y_prime_true)

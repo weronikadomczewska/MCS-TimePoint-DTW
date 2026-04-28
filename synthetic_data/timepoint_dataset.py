@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
+
 class TimePointDataset(Dataset):
     def __init__(self, path):
         self.files = list(Path(path).glob("*.npz"))
@@ -46,5 +47,5 @@ class TimePointDataset(Dataset):
             "x_w": torch.from_numpy(abp_w),
             "kp": torch.from_numpy(kp_mask),
             "kp_w": torch.from_numpy(kp_w_mask),
-            "match_mask": torch.from_numpy(match_mask)
+            "match_mask": torch.from_numpy(match_mask),
         }

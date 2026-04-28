@@ -1,5 +1,12 @@
 import numpy as np
 import torch
+
+def _patched_solve(B, A):
+    X = torch.linalg.solve(A, B)
+    return X, None  # mimic old behavior (solution, LU)
+
+
+torch.solve = _patched_solve
 import torch.nn.functional as F
 from libcpab import Cpab
 
@@ -7,22 +14,10 @@ from libcpab import Cpab
 https://github.com/SkafteNicki/libcpab
 """
 
-import torch
-
-def _patched_solve(B, A):
-    X = torch.linalg.solve(A, B)
-    return X, None   # mimic old behavior (solution, LU)
-
-torch.solve = _patched_solve
 
 
 class CPABWarper:
-    def __init__(
-        self,
-        tess_size=[16],
-        device="cpu",
-        backend="pytorch"
-    ):
+    def __init__(self, tess_size=[16], device="cpu", backend="pytorch"):
         """
         CPAB-based time warper for 1D signals.
 
@@ -30,44 +25,32 @@ class CPABWarper:
         """
         self.device = device
 
-        self.T = Cpab(
-            tess_size=tess_size,
-            backend=backend,
-            device=device
-        )
+        self.T = Cpab(tess_size=tess_size, backend=backend, device=device)
 
     def _create_grid(self, L):
         """Create normalized grid [0,1]"""
         return torch.linspace(0, 1, L, device=self.device).unsqueeze(0)
 
     def _warp_signal(self, signal, grid_t):
-        import torch
-        import torch.nn.functional as F
 
-        # --- signal ---
+        # signal
         signal = torch.tensor(signal, dtype=torch.float32)
         signal = signal.unsqueeze(0).unsqueeze(0).unsqueeze(2)  # (1,1,1,L)
 
-        # --- grid ---
+        # grid
         grid_t = 2 * grid_t - 1  # normalize to [-1, 1]
 
-        # REMOVE ANY EXTRA DIMENSIONS FIRST
-        grid_t = grid_t.squeeze()        # (L,)
-        grid_t = grid_t.unsqueeze(0)     # (1, L)
+        grid_t = grid_t.squeeze()  # (L,)
+        grid_t = grid_t.unsqueeze(0)  # (1, L)
 
         # build grid
-        grid_x = grid_t.unsqueeze(1)     # (1, 1, L)
+        grid_x = grid_t.unsqueeze(1)  # (1, 1, L)
         grid_y = torch.zeros_like(grid_x)
 
         grid = torch.stack((grid_x, grid_y), dim=-1)  # (1, 1, L, 2)
 
-        # --- warp ---
-        warped = F.grid_sample(
-            signal,
-            grid,
-            align_corners=True,
-            padding_mode="border"
-        )
+        # warp
+        warped = F.grid_sample(signal, grid, align_corners=True, padding_mode="border")
 
         return warped.squeeze().numpy()
 
@@ -106,11 +89,7 @@ class CPABWarper:
 
         grid_t_np = grid_t.squeeze().cpu().numpy()
 
-        kp_warped = np.interp(
-            kp_norm,
-            np.linspace(0, 1, L),
-            grid_t_np
-        )
+        kp_warped = np.interp(kp_norm, np.linspace(0, 1, L), grid_t_np)
 
         kp_warped = (kp_warped * (L - 1)).astype(int)
 

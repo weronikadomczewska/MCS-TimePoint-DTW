@@ -1,6 +1,7 @@
 import torch
-import torch.nn.functional as F 
-import numpy as np 
+import torch.nn.functional as F
+import numpy as np
+
 
 def get_topk_in_original_order(X_desc, X_probas, K):
     """
@@ -16,7 +17,7 @@ def get_topk_in_original_order(X_desc, X_probas, K):
     """
     N, C, L = X_desc.shape
     assert X_probas.shape == (N, L), "X_keypoints must have shape (N, L)"
-    
+
     device = X_probas.device
     if K >= L:
         return X_probas, X_desc
@@ -24,20 +25,20 @@ def get_topk_in_original_order(X_desc, X_probas, K):
     # Get the indices of the top K values per sample
     topk_values, topk_indices = torch.topk(X_probas, K, dim=1)
     # topk_indices: shape [N, K]
-    
+
     # Sort the indices per sample to maintain original order
     sorted_topk_indices, _ = torch.sort(topk_indices, dim=1)
     # sorted_topk_indices: shape [N, K]
-    
+
     # Expand indices for gathering
-    indices_expanded = sorted_topk_indices.unsqueeze(1).expand(-1, C, -1)  # Shape: [N, C, K]
-    
+    indices_expanded = sorted_topk_indices.unsqueeze(1).expand(
+        -1, C, -1
+    )  # Shape: [N, C, K]
+
     # Gather descriptors along the L dimension (time steps)
     X_topk = torch.gather(X_desc, dim=2, index=indices_expanded)  # Shape: [N, C, K]
-    
+
     return sorted_topk_indices, X_topk
-
-
 
 
 def non_maximum_suppression(detection_prob, window_size=7):
@@ -58,9 +59,13 @@ def non_maximum_suppression(detection_prob, window_size=7):
     # prepare input
     N, L = detection_prob.shape
     # (1, L' < L)
-    pooled, pooled_idx = F.max_pool1d(detection_prob, kernel_size=window_size,
-                                      stride=window_size, padding=window_size // 2,
-                                      return_indices=True)
+    pooled, pooled_idx = F.max_pool1d(
+        detection_prob,
+        kernel_size=window_size,
+        stride=window_size,
+        padding=window_size // 2,
+        return_indices=True,
+    )
 
     # Squeeze dim=1 from proba, make our life easier if only one sample
     if len(pooled.shape) == 3:
@@ -73,9 +78,6 @@ def non_maximum_suppression(detection_prob, window_size=7):
     # zero out everything but max pooled
     detection_prob[zero_out.type(torch.bool)] = 0
     return detection_prob
-
-
-
 
 
 # import torch
