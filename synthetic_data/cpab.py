@@ -1,82 +1,120 @@
+import numpy as np
 import torch
+import torch.nn.functional as F
 from libcpab import Cpab
 
+"""
+https://github.com/SkafteNicki/libcpab
+"""
 
-class TimePointCPABWarper:
-    """
-    Klasa generująca zaburzenia czasu na podstawie 1D Difeomorfizmów (CPAB).
-    Zgodna z architekturą samonadzorowaną opisaną w artykule TimePoint.
-    """
+import torch
 
-    def __init__(self, tess_size=5, sigma=0.5, device="cpu"):
-        """
-        Argumenty:
-        - tess_size: Liczba segmentów komórek CPAB. Artykuł sugeruje wartości rzędu 4-8.
-                     Im więcej segmentów, tym bardziej złożone "powyginanie" czasu.
-        - sigma: Skala wariancji dla losowania parametrów theta.
-                 Kontroluje "agresywność" zniekształcenia (0.0 to brak zmian).
-        """
-        self.device = device
-        self.sigma = sigma
+def _patched_solve(B, A):
+    X = torch.linalg.solve(A, B)
+    return X, None   # mimic old behavior (solution, LU)
 
-        # Inicjalizacja rdzenia libcpab (wymiar 1D dla szeregów czasowych)
-        self.cpab = Cpab(tess_size=tess_size, backend="pytorch", device=device, ndim=1)
+torch.solve = _patched_solve
 
-    def generate_warped_pair(self, signal: torch.Tensor):
-        """
-        Pobiera oryginalny sygnał X i zwraca jego zaburzoną wersję X'
-        oraz mapowanie indeksów czasu.
 
-        Argumenty:
-        - signal: Tensor 1D o kształcie [L] reprezentujący pojedynczy sygnał.
-
-        Zwraca:
-        - warped_signal: Sygnał po transformacji czasu X' [L].
-        - time_mapping: Wektor mówiący, skąd wzięła się dana próbka.
-        """
-        L = signal.shape[-1]
-
-        # 1. Przygotowanie wejścia do formatu wymaganego przez libcpab [Batch, Channels, Length]
-        if signal.dim() == 1:
-            signal_input = signal.unsqueeze(0).unsqueeze(0).to(self.device)
-        else:
-            signal_input = signal.to(self.device)
-
-        # 2. Losowanie nieliniowej deformacji (theta)
-        # sample_transformation zwraca losowe wartości z rozkładu normalnego.
-        # Mnożymy przez naszą sigmę, by kontrolować siłę deformacji.
-        theta = self.cpab.sample_transformation(1) * self.sigma
-
-        # 3. Zastosowanie deformacji na sygnale (Wygenerowanie X')
-        warped_signal = self.cpab.transform_data(signal_input, theta, outsize=(L,))
-
-        # 4. Magia TimePoint: Generowanie mapowania siatki czasu (Grid Mapping)
-        # Tworzymy znormalizowaną siatkę czasu (od 0.0 do 1.0)
-        grid = self.cpab.uniform_meshgrid([L]).to(self.device)
-
-        # Aplikujemy to samo przekształcenie theta na siatkę czasu.
-        # Zwróci to informację, gdzie fizycznie przesunęły się punkty bazowe.
-        warped_grid = self.cpab.transform_grid(grid, theta)
-
-        # Wracamy do formatu 1D dla łatwiejszej manipulacji na zewnątrz
-        return warped_signal.squeeze(), warped_grid.squeeze(), theta
-
-    def get_matching_indices(
-        self, warped_grid: torch.Tensor, original_indices: torch.Tensor, L: int
+class CPABWarper:
+    def __init__(
+        self,
+        tess_size=[16],
+        device="cpu",
+        backend="pytorch"
     ):
         """
-        Funkcja pomocnicza dla Zadania 2 / 6:
-        Przelicza oryginalne indeksy punktów kluczowych na nowe indeksy po deformacji.
+        CPAB-based time warper for 1D signals.
+
+        tess_size: number of segments (paper uses ~16)
         """
-        # warped_grid jest w skali [0, 1]. Mnożymy przez L-1, aby dostać indeksy tablicy [0, L-1]
-        grid_indices = warped_grid * (L - 1)
+        self.device = device
 
-        mapped_indices = []
-        for idx in original_indices:
-            # Szukamy, gdzie w nowej, zdeformowanej siatce wylądował nasz oryginalny indeks
-            # Używamy najprostszego zaokrąglenia do najbliższego sąsiada
-            distances = torch.abs(grid_indices - float(idx))
-            new_idx = torch.argmin(distances)
-            mapped_indices.append(new_idx.item())
+        self.T = Cpab(
+            tess_size=tess_size,
+            backend=backend,
+            device=device
+        )
 
-        return torch.tensor(mapped_indices, dtype=torch.long)
+    def _create_grid(self, L):
+        """Create normalized grid [0,1]"""
+        return torch.linspace(0, 1, L, device=self.device).unsqueeze(0)
+
+    def _warp_signal(self, signal, grid_t):
+        import torch
+        import torch.nn.functional as F
+
+        # --- signal ---
+        signal = torch.tensor(signal, dtype=torch.float32)
+        signal = signal.unsqueeze(0).unsqueeze(0).unsqueeze(2)  # (1,1,1,L)
+
+        # --- grid ---
+        grid_t = 2 * grid_t - 1  # normalize to [-1, 1]
+
+        # REMOVE ANY EXTRA DIMENSIONS FIRST
+        grid_t = grid_t.squeeze()        # (L,)
+        grid_t = grid_t.unsqueeze(0)     # (1, L)
+
+        # build grid
+        grid_x = grid_t.unsqueeze(1)     # (1, 1, L)
+        grid_y = torch.zeros_like(grid_x)
+
+        grid = torch.stack((grid_x, grid_y), dim=-1)  # (1, 1, L, 2)
+
+        # --- warp ---
+        warped = F.grid_sample(
+            signal,
+            grid,
+            align_corners=True,
+            padding_mode="border"
+        )
+
+        return warped.squeeze().numpy()
+
+    def sample_theta(self, batch_size=1):
+        thetas = [self.T.sample_transformation() for _ in range(batch_size)]
+        return torch.cat(thetas, dim=0)
+
+    def warp(self, signal, theta=None):
+        """
+        Warp signal with CPAB.
+
+        Returns:
+        - warped signal
+        - transformed grid
+        """
+        L = len(signal)
+
+        if theta is None:
+            theta = self.sample_theta()
+
+        grid = self._create_grid(L)
+        grid_t = self.T.transform_grid(grid, theta)
+
+        warped = self._warp_signal(signal, grid_t)
+
+        return warped, grid_t
+
+    def warp_keypoints(self, keypoints, grid_t, L):
+        """
+        Warp keypoints using the same CPAB transformation.
+        """
+        kp = np.array(keypoints)
+
+        # normalize to [0,1]
+        kp_norm = kp / (L - 1)
+
+        grid_t_np = grid_t.squeeze().cpu().numpy()
+
+        kp_warped = np.interp(
+            kp_norm,
+            np.linspace(0, 1, L),
+            grid_t_np
+        )
+
+        kp_warped = (kp_warped * (L - 1)).astype(int)
+
+        # clip to valid range
+        kp_warped = np.clip(kp_warped, 0, L - 1)
+
+        return kp_warped

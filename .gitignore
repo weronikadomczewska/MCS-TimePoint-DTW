@@ -213,3 +213,11 @@ img/
 .DS_Store
 
 libcpab/
+
+synthetic_dataset/
+
+plots/
+
+plots_cpab/
+
+data_cpab/

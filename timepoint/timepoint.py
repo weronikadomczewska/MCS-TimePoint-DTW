@@ -1,31 +1,85 @@
 from encoder import SharedEncoder
 from decoders import KeypointDecoder, DescriptorDecoder
 import torch.nn as nn
+import torch
+from utils.timepoint_utils import get_topk_in_original_order, non_maximum_suppression
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 class TimePointModel(nn.Module):
-    def __init__(self, in_channels=1, d_enc=256, d_desc=256):
+    def __init__(self, input_channels=1, encoder_dims=[64,64,128,128], descriptor_dim=256):
         super().__init__()
-        # 1. Rdzeń: Współdzielony Enkoder (zmniejsza L do L')
-        self.shared_encoder = SharedEncoder(in_channels=in_channels, d_enc=d_enc)
 
-        # 2. Ramię pierwsze: Dekoder Punktów Kluczowych (Zwraca do L)
-        self.kp_decoder = KeypointDecoder(d_enc=d_enc, cell_size=8)
+        self.encoder = SharedEncoder(input_channels, encoder_dims)
 
-        # 3. Ramię drugie: Dekoder Deskryptorów (Zwraca do L)
-        self.desc_decoder = DescriptorDecoder(
-            d_enc=d_enc, d_desc=d_desc, upsample_factor=8
-        )
+        encoder_output_channels = encoder_dims[-1]
+
+        self.detector_head = KeypointDecoder(encoder_output_channels)
+        self.descriptor_head = DescriptorDecoder(encoder_output_channels, descriptor_dim)
 
     def forward(self, x):
-        """Przepływ sygnału (np. zaszumionego ABP) przez całą sieć."""
-        # Krok 1: Ekstrakcja cech bazowych
-        F_features = self.shared_encoder(x)
+        N, C, L = x.shape
 
-        # Krok 2: Detekcja, gdzie są punkty kluczowe
-        kp_scores, kp_logits = self.kp_decoder(F_features)
+        features = self.encoder(x)
 
-        # Krok 3: Wygenerowanie "odcisków palców" dla każdego punktu w czasie
-        F_desc = self.desc_decoder(F_features)
+        # --- Keypoints ---
+        S_scores = self.detector_head(features)   # [B,1,L]
+        S_scores = S_scores[:, :, :L]
+        S_scores = S_scores.squeeze(1)            # [B,L]
 
-        return kp_scores, kp_logits, F_desc
+        # --- Descriptors ---
+        D = self.descriptor_head(features)        # [B,D,L]
+        D = D[:, :, :L]
+        D = D.permute(0, 2, 1)                    # [B,L,D]
+
+        return S_scores, D
+    
+    def get_topk_points(self, x, kp_percent=1, nms_window=5):
+        N, C, L = x.shape
+
+        features = self.encoder(x)
+
+        detection_proba = self.detector_head(features)[:, :, :L]
+        descriptors = self.descriptor_head(features)[:, :, :L]
+
+        detection_proba = detection_proba.squeeze(1)
+
+        detection_proba = non_maximum_suppression(
+            detection_proba, window_size=nms_window
+        )
+
+        if kp_percent < 1:
+            num_kp = int(kp_percent * L)
+
+            sorted_topk_indices, detection_proba = get_topk_in_original_order(
+                detection_proba, detection_proba, K=num_kp
+            )
+        else:
+            sorted_topk_indices = torch.arange(L)
+
+        return sorted_topk_indices, detection_proba, descriptors
+    
+
+if __name__ == "__main__":
+    import torch
+
+    print("🔍 Testing TimePointModel...")
+
+    try:
+        model = TimePointModel()
+        print("✅ Model initialized")
+
+        # dummy input [B, C, L]
+        x = torch.randn(2, 1, 1000)
+
+        S, D = model(x)
+
+        print("✅ Forward pass OK")
+        print("Keypoint map shape:", S.shape)   # [B, L]
+        print("Descriptor shape:", D.shape)     # [B, L, D]
+
+    except Exception as e:
+        print("❌ ERROR in TimePointModel:")
+        import traceback
+        traceback.print_exc()

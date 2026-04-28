@@ -1,81 +1,77 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class KeypointDecoder(nn.Module):
-    def __init__(self, d_enc=256, cell_size=8):
+    """
+    Detector Head for predicting keypoint probability map.
+    """
+    def __init__(self, input_channels, cell_size=8):
         super().__init__()
         self.cell_size = cell_size
+        self.conv = nn.Conv1d(input_channels, cell_size + 1, kernel_size=1)  # Output channels: cell_size + 1 (dustbin)
 
-        # Warstwa konwolucyjna mapująca D_enc -> 8 (cell_size)
-        # Używamy kernel_size=3 i padding=1, aby długość L' pozostała bez zmian
-        self.conv = nn.Conv1d(
-            in_channels=d_enc, out_channels=cell_size, kernel_size=3, padding=1
-        )
+    def forward(self, x):
+        # x: [N, C, L/8]
+        N, C, Lc = x.shape  # Lc = L/8
+        x = self.conv(x)     # [N, cell_size + 1, Lc]
 
-    def forward(self, F_features):
-        """
-        Argumenty:
-        - F_features: Mapa cech z enkodera. Kształt: [Batch, D_enc, L']
+        # Reshape to [N, cell_size + 1, Lc]
+        # Softmax over the cell_size + 1 channels (including dustbin)
+        x = F.softmax(x, dim=1)
+        # Remove dustbin (last channel)
+        x = x[:, :-1, :]  # [N, cell_size, Lc]
 
-        Zwraca:
-        - scores: Prawdopodobieństwa po sigmoidzie [Batch, L]
-        - logits: Wartości przed sigmoidem (do funkcji straty) [Batch, L]
-        """
-        B, D, L_prime = F_features.shape
+        # Reshape to [N, 1, L]
+        x = x.permute(0, 2, 1).reshape(N, 1, Lc * self.cell_size)
 
-        # 1. Redukcja cech: R^{D_enc x L'} -> R^{8 x L'}
-        x = self.conv(F_features)  # Kształt: [Batch, 8, L']
-
-        # 2. Reshape do oryginalnej długości sygnału L (gdzie L = L' * 8)
-        # Analogiczne do 1D PixelShuffle.
-        # Najpierw zmieniamy wymiary na [Batch, L', 8], aby kolejne 8 komórek czasu
-        # ułożyło się po kolei dla każdego punktu przestrzennego L'.
-        x = x.permute(0, 2, 1).contiguous()
-
-        # Następnie spłaszczamy wymiary, by uzyskać sygnał 1D o długości L
-        logits = x.view(B, -1)  # Kształt: [Batch, L]
-
-        # 3. Aktywacja Sigmoid (prawdopodobieństwa s_t w przedziale [0, 1])
-        scores = torch.sigmoid(logits)
-
-        return scores, logits
+        return x  # Keypoint probability map of size [N, 1, L]
 
 
 class DescriptorDecoder(nn.Module):
-    def __init__(self, d_enc=256, d_desc=256, upsample_factor=8):
+    """
+    Descriptor Head for generating feature descriptors.
+    """
+    def __init__(self, input_channels, descriptor_dim=256):
         super().__init__()
+        self.conv = nn.Conv1d(input_channels, descriptor_dim, kernel_size=1)
+        self.upsample = nn.Upsample(scale_factor=8, mode='linear', align_corners=False)
 
-        # 1. Warstwa konwolucyjna mapująca cechy z enkodera (F) do przestrzeni deskryptorów
-        # Używamy padding=1, aby nie zmienić długości sygnału (zostaje L')
-        self.conv = nn.Conv1d(
-            in_channels=d_enc, out_channels=d_desc, kernel_size=3, padding=1
-        )
+    def forward(self, x):
+        # x: [N, C, L/8]
+        x = self.conv(x)  # [N, descriptor_dim, L/8]
+        x = self.upsample(x)  # [N, descriptor_dim, L]
+        #x = F.normalize(x, p=2, dim=1)  # L2 norm along channel dimension, now performed at loss.
+        return x  
 
-        # 2. Operator upsamplingu (L' -> L)
-        # Ponieważ enkoder zmniejszył sygnał 8-krotnie, musimy go powiększyć 8-krotnie.
-        # Używamy interpolacji liniowej (standard dla sygnałów 1D).
-        self.upsample = nn.Upsample(
-            scale_factor=upsample_factor, mode="linear", align_corners=False
-        )
+if __name__ == "__main__":
+    import torch
 
-    def forward(self, F_features):
-        """
-        Argumenty:
-        - F_features: Mapa cech z Shared Encoder. Kształt: [Batch, D_enc, L']
+    print("🔍 Testing decoders...")
 
-        Zwraca:
-        - F_desc: Znormalizowana, gęsta macierz deskryptorów. Kształt: [Batch, D_desc, L]
-        """
-        # Mapowanie cech [Batch, D_enc, L'] -> [Batch, D_desc, L']
-        x = self.conv(F_features)
+    try:
+        # simulate encoder output: [B, C, L/8]
+        B, C, L = 2, 128, 1000
+        x = torch.randn(B, C, L // 8)
 
-        # Upsampling [Batch, D_desc, L'] -> [Batch, D_desc, L]
-        x = self.upsample(x)
+        print("Input shape:", x.shape)
 
-        # L2 Normalization (aby wektory leżały na "jednostkowej hipersferze")
-        # Normalizujemy wzdłuż wymiaru D_desc (dim=1), tak aby wektor cech
-        # dla KAŻDEGO punktu w czasie 't' miał długość euklidesową równą 1.
-        F_desc = F.normalize(x, p=2, dim=1)
+        # --- Keypoint decoder ---
+        kp_decoder = KeypointDecoder(C)
+        kp_out = kp_decoder(x)
 
-        return F_desc
+        print("✅ KeypointDecoder OK")
+        print("Keypoint output shape:", kp_out.shape)  # expected [B, 1, L]
+
+        # --- Descriptor decoder ---
+        desc_decoder = DescriptorDecoder(C)
+        desc_out = desc_decoder(x)
+
+        print("✅ DescriptorDecoder OK")
+        print("Descriptor output shape:", desc_out.shape)  # expected [B, D, L]
+
+    except Exception as e:
+        print("❌ ERROR in decoders:")
+        import traceback
+        traceback.print_exc()
