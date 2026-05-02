@@ -223,3 +223,7 @@ plots_cpab/
 data_cpab/
 
 debug_plots/
+
+dataset_synthetic_cpab/
+
+plots_dataset_synthetic_cpab/

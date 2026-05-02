@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+
 def _patched_solve(B, A):
     X = torch.linalg.solve(A, B)
     return X, None  # mimic old behavior (solution, LU)
@@ -13,7 +14,6 @@ from libcpab import Cpab
 """
 https://github.com/SkafteNicki/libcpab
 """
-
 
 
 class CPABWarper:
@@ -32,31 +32,23 @@ class CPABWarper:
         return torch.linspace(0, 1, L, device=self.device).unsqueeze(0)
 
     def _warp_signal(self, signal, grid_t):
+        signal = np.asarray(signal)
+        grid_t = grid_t.squeeze().cpu().numpy()
 
-        # signal
-        signal = torch.tensor(signal, dtype=torch.float32)
-        signal = signal.unsqueeze(0).unsqueeze(0).unsqueeze(2)  # (1,1,1,L)
+        L = len(signal)
 
-        # grid
-        grid_t = 2 * grid_t - 1  # normalize to [-1, 1]
+        # grid_t jest w [0,1] → skalujemy do indeksów
+        grid_idx = grid_t * (L - 1)
 
-        grid_t = grid_t.squeeze()  # (L,)
-        grid_t = grid_t.unsqueeze(0)  # (1, L)
+        # interpolacja 1D
+        warped = np.interp(grid_idx, np.arange(L), signal)
 
-        # build grid
-        grid_x = grid_t.unsqueeze(1)  # (1, 1, L)
-        grid_y = torch.zeros_like(grid_x)
+        return warped
 
-        grid = torch.stack((grid_x, grid_y), dim=-1)  # (1, 1, L, 2)
-
-        # warp
-        warped = F.grid_sample(signal, grid, align_corners=True, padding_mode="border")
-
-        return warped.squeeze().numpy()
-
-    def sample_theta(self, batch_size=1):
+    def sample_theta(self, batch_size=1, scale=0.1):
         thetas = [self.T.sample_transformation() for _ in range(batch_size)]
-        return torch.cat(thetas, dim=0)
+        theta = torch.cat(thetas, dim=0)
+        return scale * theta
 
     def warp(self, signal, theta=None):
         """
@@ -69,7 +61,7 @@ class CPABWarper:
         L = len(signal)
 
         if theta is None:
-            theta = self.sample_theta()
+            theta = self.sample_theta(scale=0.05)
 
         grid = self._create_grid(L)
         grid_t = self.T.transform_grid(grid, theta)

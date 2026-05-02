@@ -14,17 +14,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 
-from signal_generators import CBFVSignalGenerator
+from signal_generators import ABPGenerator, CBFVMaderModel, LogNormalCBFV
 from cpab import CPABWarper
 
 from scipy.signal import butter, filtfilt
 
 
-def highpass_filter(signal, fs, cutoff=0.5, order=3):
-    nyq = 0.5 * fs
-    normal_cutoff = cutoff / nyq
-    b, a = butter(order, normal_cutoff, btype="high", analog=False)
-    return filtfilt(b, a, signal)
+# def highpass_filter(signal, fs, cutoff=0.5, order=3):
+#     nyq = 0.5 * fs
+#     normal_cutoff = cutoff / nyq
+#     b, a = butter(order, normal_cutoff, btype="high", analog=False)
+#     return filtfilt(b, a, signal)
 
 
 def extract_keypoints(signal, fs):
@@ -82,84 +82,153 @@ def plot_all(
 
 
 def generate_cpab_dataset(
-    n_samples=5000,
-    save_dir="dataset_cpab",
+    n_samples=500,
+    base_dir="dataset_cpab",
     plot_dir="plots_cpab",
     fs=100,
     duration=10,
     save_plots=True,
 ):
-    os.makedirs(save_dir, exist_ok=True)
+    # =========================
+    # FOLDERY
+    # =========================
+    dir_mader = os.path.join(base_dir, "mader")
+    dir_log = os.path.join(base_dir, "lognormal")
+
+    os.makedirs(dir_mader, exist_ok=True)
+    os.makedirs(dir_log, exist_ok=True)
+
     if save_plots:
         os.makedirs(plot_dir, exist_ok=True)
 
-    generator = CBFVSignalGenerator(fs=fs, duration=duration)
+    # =========================
+    # GENERATORY
+    # =========================
+    abp_gen = ABPGenerator(fs=fs)
+    mader = CBFVMaderModel()
+    lognorm = LogNormalCBFV(fs)
+
     warper = CPABWarper(tess_size=[16])
 
     for i in range(n_samples):
-        t, abp, cbfv, metadata = generator.generate()
+        # =========================
+        # 1. ABP
+        # =========================
+        t, abp = abp_gen.generate_abp_signal(duration_sec=duration)
 
-        # --- FILTER ---
-        abp_filt = highpass_filter(abp, fs).copy()
-        cbfv_filt = highpass_filter(cbfv, fs).copy()
+        # =========================
+        # 2. KEYPOINTY ABP
+        # =========================
+        # abp_filt = highpass_filter(abp, fs)
+        abp_kp = extract_keypoints(abp, fs)
 
-        # --- KEYPOINTS ON FILTERED ---
-        abp_kp = extract_keypoints(abp_filt, fs)
-        cbfv_kp = extract_keypoints(cbfv_filt, fs)
+        # =========================
+        # 3. CBFV – MADER
+        # =========================
+        cbfv_mader = mader.simulate(abp, fs)
+        # cbfv_mader_filt = highpass_filter(cbfv_mader, fs)
+        cbfv_mader_kp = extract_keypoints(cbfv_mader, fs)
 
-        # # --- 2. Extract keypoints ---
-        # abp_kp = extract_keypoints(abp, fs)
-        # cbfv_kp = extract_keypoints(cbfv, fs)
+        # =========================
+        # 4. CBFV – LOGNORMAL
+        # =========================
+        peaks, _ = find_peaks(abp, distance=int(fs * 0.4))
+        beats = t[peaks]
 
-        # --- 3. CPAB transform (SAME theta!) ---
-        theta = warper.sample_theta()
+        cbfv_log = lognorm.generate(t, beats, abp=abp)
+        # cbfv_log_filt = highpass_filter(cbfv_log, fs)
+        cbfv_log_kp = extract_keypoints(cbfv_log, fs)
 
-        abp_warped, grid_t = warper.warp(abp_filt, theta)
-        cbfv_warped, _ = warper.warp(cbfv_filt, theta)
+        # =========================
+        # 5. CPAB (ten sam theta!)
+        # =========================
 
-        # abp_warped, grid_t = warper.warp(abp, theta)
-        # cbfv_warped, _ = warper.warp(cbfv, theta)
+        scale = np.random.uniform(0.05, 0.15)
+        theta = warper.sample_theta(scale=scale)
 
-        abp_kp_warped = warper.warp_keypoints(abp_kp, grid_t, len(abp))
-        cbfv_kp_warped = warper.warp_keypoints(cbfv_kp, grid_t, len(cbfv))
+        # --- MADER ---
+        abp_warped_m, grid_t = warper.warp(abp.copy(), theta)
+        cbfv_warped_m, _ = warper.warp(cbfv_mader.copy(), theta)
 
-        # --- 4. Save ---
+        abp_kp_warped_m = warper.warp_keypoints(abp_kp.copy(), grid_t, len(abp))
+        cbfv_kp_warped_m = warper.warp_keypoints(cbfv_mader_kp.copy(), grid_t, len(abp))
+
+        # --- LOGNORMAL ---
+        abp_warped_l, grid_t = warper.warp(abp.copy(), theta)
+        cbfv_warped_l, _ = warper.warp(cbfv_log.copy(), theta)
+
+        abp_kp_warped_l = warper.warp_keypoints(abp_kp.copy(), grid_t, len(abp))
+        cbfv_kp_warped_l = warper.warp_keypoints(cbfv_log_kp.copy(), grid_t, len(abp))
+
+        # =========================
+        # 6. SAVE
+        # =========================
+
+        # --- MADER ---
         np.savez_compressed(
-            os.path.join(save_dir, f"sample_{i}.npz"),
-            # signals
+            os.path.join(dir_mader, f"sample_{i}.npz"),
             t=t,
-            abp=abp_filt,
-            cbfv=cbfv_filt,
-            abp_warped=abp_warped,
-            cbfv_warped=cbfv_warped,
-            # keypoints
+            abp=abp,
+            cbfv=cbfv_mader,
+            abp_warped=abp_warped_m,
+            cbfv_warped=cbfv_warped_m,
             abp_kp=abp_kp,
-            cbfv_kp=cbfv_kp,
-            abp_kp_warped=abp_kp_warped,
-            cbfv_kp_warped=cbfv_kp_warped,
-            # cpab
+            cbfv_kp=cbfv_mader_kp,
+            abp_kp_warped=abp_kp_warped_m,
+            cbfv_kp_warped=cbfv_kp_warped_m,
             theta=theta.squeeze().cpu().numpy(),
             grid_t=grid_t.squeeze().cpu().numpy(),
-            # metadata
-            metadata=str(metadata),
+            model="mader",
         )
 
-        # --- 5. Plot ---
-        if save_plots and i < 50:
+        # --- LOGNORMAL ---
+        np.savez_compressed(
+            os.path.join(dir_log, f"sample_{i}.npz"),
+            t=t,
+            abp=abp,
+            cbfv=cbfv_log,
+            abp_warped=abp_warped_l,
+            cbfv_warped=cbfv_warped_l,
+            abp_kp=abp_kp,
+            cbfv_kp=cbfv_log_kp,
+            abp_kp_warped=abp_kp_warped_l,
+            cbfv_kp_warped=cbfv_kp_warped_l,
+            theta=theta.squeeze().cpu().numpy(),
+            grid_t=grid_t.squeeze().cpu().numpy(),
+            model="lognormal",
+        )
+
+        # =========================
+        # 7. PLOT
+        # =========================
+        if save_plots and i < 20:
             plot_all(
                 t,
                 abp,
-                cbfv,
-                abp_warped,
-                cbfv_warped,
+                cbfv_mader,
+                abp_warped_m,
+                cbfv_warped_m,
                 abp_kp,
-                abp_kp_warped,
-                cbfv_kp,
-                cbfv_kp_warped,
-                save_path=os.path.join(plot_dir, f"sample_{i}.png"),
+                abp_kp_warped_m,
+                cbfv_mader_kp,
+                cbfv_kp_warped_m,
+                save_path=os.path.join(plot_dir, f"mader_{i}.png"),
             )
 
-        if i % 100 == 0:
+            plot_all(
+                t,
+                abp,
+                cbfv_log,
+                abp_warped_l,
+                cbfv_warped_l,
+                abp_kp,
+                abp_kp_warped_l,
+                cbfv_log_kp,
+                cbfv_kp_warped_l,
+                save_path=os.path.join(plot_dir, f"log_{i}.png"),
+            )
+
+        if i % 50 == 0:
             print(f"[INFO] {i}/{n_samples}")
 
     print("DONE")
@@ -168,8 +237,8 @@ def generate_cpab_dataset(
 if __name__ == "__main__":
     generate_cpab_dataset(
         n_samples=22,
-        save_dir="data_cpab",
-        plot_dir="plots_cpab_updated",
+        base_dir="dataset_synthetic_cpab",
+        plot_dir="plots_dataset_synthetic_cpab",
         fs=100,
-        duration=60,
+        duration=15,
     )
