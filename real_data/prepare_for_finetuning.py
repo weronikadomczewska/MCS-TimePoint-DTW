@@ -7,6 +7,7 @@ from synthetic_data.cpab import CPABWarper
 import numpy as np
 import os
 
+
 def get_cbfv_channel(row):
     left = row["FV_LEWA_MCA.3"]
     right = row["FV_PRAWA_MCA.3"]
@@ -17,12 +18,13 @@ def get_cbfv_channel(row):
         return "fv_l"
     else:
         return None
-    
+
 
 def extract_keypoints(signal, fs):
     peaks, _ = find_peaks(signal, distance=int(fs * 0.4))
     troughs, _ = find_peaks(-signal, distance=int(fs * 0.4))
     return np.sort(np.concatenate([peaks, troughs]))
+
 
 def interpolate_signal(x):
     x = pd.Series(x)
@@ -38,19 +40,15 @@ def interpolate_signal(x):
 
 def convert_datetime(df):
     dt_numeric = pd.to_numeric(
-        df["DateTime"].astype(str).str.replace(",", "."),
-        errors="coerce"
+        df["DateTime"].astype(str).str.replace(",", "."), errors="coerce"
     )
 
-    dt = pd.to_datetime(
-        dt_numeric,
-        origin="1899-12-30",
-        unit="D"
-    )
+    dt = pd.to_datetime(dt_numeric, origin="1899-12-30", unit="D")
 
     t = (dt - dt.iloc[0]).dt.total_seconds()
 
     return t.values
+
 
 def extract_signals(df, cbfv_channel):
     """
@@ -71,25 +69,24 @@ def extract_signals(df, cbfv_channel):
     df.columns = df.columns.str.strip()
 
     # --- TIME (Excel → seconds) ---
-    t = pd.to_numeric(
-        df["DateTime"].astype(str).str.replace(",", "."),
-        errors="coerce"
-    )
+    t = pd.to_numeric(df["DateTime"].astype(str).str.replace(",", "."), errors="coerce")
 
     t = (t - t.iloc[0]) * 24 * 3600  # days → seconds
 
     # --- ABP ---
     abp = pd.to_numeric(
-        df["abp_finger[mm_Hg]"].astype(str).str.replace(",", "."),
-        errors="coerce"
+        df["abp_finger[mm_Hg]"].astype(str).str.replace(",", "."), errors="coerce"
     ).values
-
 
     # --- CBFV ---
     if cbfv_channel == "fv_r":
-        cbfv = pd.to_numeric(df["fv_r"].astype(str).str.replace(",", "."), errors="coerce").values
+        cbfv = pd.to_numeric(
+            df["fv_r"].astype(str).str.replace(",", "."), errors="coerce"
+        ).values
     elif cbfv_channel == "fv_l":
-        cbfv = pd.to_numeric(df["fv_l"].astype(str).str.replace(",", "."), errors="coerce").values
+        cbfv = pd.to_numeric(
+            df["fv_l"].astype(str).str.replace(",", "."), errors="coerce"
+        ).values
     else:
         raise ValueError(f"Invalid cbfv_channel: {cbfv_channel}")
 
@@ -102,23 +99,18 @@ def extract_signals(df, cbfv_channel):
 
     return t[:L], abp[:L], cbfv[:L]
 
+
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 
+
 def plot_sample(
-    abp, abp_w,
-    cbfv, cbfv_w,
-    abp_kp, abp_kp_w,
-    fs,
-    patient_id,
-    tag,
-    idx,
-    save_dir=None
+    abp, abp_w, cbfv, cbfv_w, abp_kp, abp_kp_w, fs, patient_id, tag, idx, save_dir=None
 ):
     t = np.arange(len(abp)) / fs
 
-    fig, ax = plt.subplots(2, 1, figsize=(12,6), sharex=True)
+    fig, ax = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
 
     # --- ABP ---
     ax[0].plot(t, abp, color="red", label="ABP")
@@ -149,11 +141,10 @@ def plot_sample(
     else:
         plt.show()
 
+
 def segment(signal, window, step):
-    return [
-        signal[i:i + window]
-        for i in range(0, len(signal) - window, step)
-    ]
+    return [signal[i : i + window] for i in range(0, len(signal) - window, step)]
+
 
 def bandpass_filter(signal, fs, low=0.5, high=10, order=3):
     nyq = 0.5 * fs
@@ -164,6 +155,7 @@ def bandpass_filter(signal, fs, low=0.5, high=10, order=3):
 def normalize(x):
     return (x - np.mean(x)) / (np.std(x) + 1e-8)
 
+
 config_path = Path("config/config.json")
 config = json.load(open(config_path))
 
@@ -173,10 +165,10 @@ cbfv_config_path = "config/cbfv_config.csv"
 
 cbfv_config = pd.read_csv(cbfv_config_path)
 
-cbfv_config["cbfv_channel"] = cbfv_config .apply(get_cbfv_channel, axis=1)
+cbfv_config["cbfv_channel"] = cbfv_config.apply(get_cbfv_channel, axis=1)
 
 # filtering out patients with no cbfv
-cbfv_config = cbfv_config[cbfv_config ["cbfv_channel"].notna()]
+cbfv_config = cbfv_config[cbfv_config["cbfv_channel"].notna()]
 
 meta_map = dict(zip(cbfv_config["patient_id"], cbfv_config["cbfv_channel"]))
 
@@ -224,14 +216,9 @@ for patient_dir in root.iterdir():
     baseline_df = pd.read_csv(baseline_path, sep=";")
     position_df = pd.read_csv(position_path, sep=";")
 
-
-    datasets = {
-        "baseline": baseline_df,
-        "position": position_df
-    }
+    datasets = {"baseline": baseline_df, "position": position_df}
 
     for tag, df in datasets.items():
-
         # --- extract ---
         t, abp, cbfv = extract_signals(df, cbfv_channel)
 
@@ -249,7 +236,6 @@ for patient_dir in root.iterdir():
         abp = normalize(abp)
         cbfv = normalize(cbfv)
 
-
         # --- segmentation ---
         abp_segments = segment(abp, window, step)
         cbfv_segments = segment(cbfv, window, step)
@@ -257,11 +243,9 @@ for patient_dir in root.iterdir():
         # print(abp_segments)
 
         for abp_seg, cbfv_seg in zip(abp_segments, cbfv_segments):
-
             print(f"{tag} len signal seg:", len(abp_seg))
             if len(abp_seg) != window:
                 continue
-
 
             # --- keypoints ---
             abp_kp = extract_keypoints(abp_seg, fs)
@@ -275,11 +259,7 @@ for patient_dir in root.iterdir():
             abp_w, grid_t = warper.warp(abp_seg, theta)
             cbfv_w, _ = warper.warp(cbfv_seg, theta)
 
-            abp_kp_w = warper.warp_keypoints(
-                abp_kp,
-                grid_t,
-                len(abp_seg)
-            )
+            abp_kp_w = warper.warp_keypoints(abp_kp, grid_t, len(abp_seg))
 
             # --- SAVE ---
             idx = counters[tag]
@@ -303,26 +283,21 @@ for patient_dir in root.iterdir():
                     patient_id,
                     tag,
                     idx,
-                    save_dir="debug_plots"
+                    save_dir="debug_plots",
                 )
 
             np.savez_compressed(
                 finetuning_path,
-
                 abp=abp_seg.astype(np.float32),
                 abp_warped=abp_w.astype(np.float32),
-
                 cbfv=cbfv_seg.astype(np.float32),
                 cbfv_warped=cbfv_w.astype(np.float32),
-
                 abp_kp=abp_kp.astype(np.int32),
                 abp_kp_warped=abp_kp_w.astype(np.int32),
-
                 theta=theta.squeeze().cpu().numpy(),
                 grid_t=grid_t.squeeze().cpu().numpy(),
-
                 patient_id=patient_id,
-                condition=tag
+                condition=tag,
             )
 
             counters[tag] += 1

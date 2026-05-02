@@ -19,6 +19,7 @@ from cpab import CPABWarper
 
 from scipy.signal import butter, filtfilt
 
+
 def highpass_filter(signal, fs, cutoff=0.5, order=3):
     nyq = 0.5 * fs
     normal_cutoff = cutoff / nyq
@@ -166,5 +167,9 @@ def generate_cpab_dataset(
 
 if __name__ == "__main__":
     generate_cpab_dataset(
-        n_samples=6, save_dir="data_cpab", plot_dir="plots_cpab", fs=100, duration=10
+        n_samples=22,
+        save_dir="data_cpab",
+        plot_dir="plots_cpab_updated",
+        fs=100,
+        duration=60,
     )
