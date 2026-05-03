@@ -24,10 +24,9 @@ class ABPGenerator:
         self.a2_base = np.random.uniform(10, 25)
         self.a3_base = np.random.uniform(5, 10)
 
-        self.c1_base = np.random.uniform(0.02, 0.04) 
+        self.c1_base = np.random.uniform(0.02, 0.04)
         self.c2_base = np.random.uniform(0.06, 0.1)
         self.c3_base = np.random.uniform(0.1, 0.18)
-
 
         self.params = [
             (self.a1_base, self.b1_base, self.c1_base),
@@ -36,7 +35,7 @@ class ABPGenerator:
         ]
 
     def gaussian(self, t, a, b, c):
-        return a * np.exp(-((t - b) ** 2) / (2*c**2))
+        return a * np.exp(-((t - b) ** 2) / (2 * c**2))
 
     def generate_wave(self, t_local):
         # adding micro-fluctuations in between beats
@@ -74,13 +73,12 @@ class ABPGenerator:
 
         # return g.astype(np.float32)
         return G.astype(np.float32)
-    
+
     def generate_abp_signal(self, duration_sec, hr_mean=70):
         abp = []
         time = 0.0
 
         while time < duration_sec:
-
             hr = np.random.normal(hr_mean, 5)
             hr = np.clip(hr, 50, 120)
 
@@ -198,9 +196,8 @@ class CBFVMaderModel:
             out[i] = self.step(p, dt)
 
         return out
-        
-    def generate_cbfv_from_abp(self, abp, fs):
 
+    def generate_cbfv_from_abp(self, abp, fs):
         n = len(abp)
 
         window = int(1.0 * fs)
@@ -220,13 +217,14 @@ class CBFVMaderModel:
         # taking pulsation from ABP
         abp_hp = abp - map_signal
 
-        # amplitude 
+        # amplitude
         cbfv_pulse = 0.3 * abp_hp
 
         cbfv = cbfv_slow_delayed + cbfv_pulse
 
         return cbfv.astype(np.float32)
-    
+
+
 class LogNormalCBFV:
     def __init__(self, fs):
         self.fs = fs
@@ -255,7 +253,7 @@ class LogNormalCBFV:
             sigma = np.random.uniform(0.3, 0.5)
 
             pulse = self.lognormal_pulse(t_local, mu, sigma)
-            
+
             # normalisation to [-1, 1]
             pulse = pulse - np.mean(pulse)
             pulse = pulse / (np.max(np.abs(pulse)) + 1e-8)
@@ -264,7 +262,7 @@ class LogNormalCBFV:
 
             pulse = pulse * amplitude
 
-            #baseline - middle of the range
+            # baseline - middle of the range
             baseline = np.random.uniform(55, 60)
 
             cbfv[mask] = baseline + pulse
@@ -276,15 +274,6 @@ class LogNormalCBFV:
         cbfv_delayed[:delay] = cbfv[0]
 
         return cbfv_delayed.astype(np.float32)
-
-
-def extract_keypoints(signal, fs):
-    """
-    https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html
-    """
-    peaks, _ = find_peaks(signal, distance=int(fs * 0.4), height=np.mean(signal) + 0.5 * np.std(signal))
-    troughs, _ = find_peaks(-signal, distance=int(fs * 0.4))
-    return np.sort(np.concatenate([peaks, troughs]))
 
 
 def plot_signals(t, abp, cbfv, abp_kp=None, cbfv_kp=None, save_path=None, show=False):
@@ -395,21 +384,10 @@ if __name__ == "__main__":
     peaks, _ = find_peaks(abp, distance=int(fs * 0.4))
     beats = t[peaks]
 
-
     cbfv_gen = LogNormalCBFV(fs)
     cbfv = cbfv_gen.generate(t, beats, abp=abp)
 
     cbfv_gen = CBFVMaderModel(fs)
     cbfv = cbfv_gen.generate_cbfv_from_abp(abp, fs)
 
-    abp_kp = extract_keypoints(abp, fs)
-    cbfv_kp = extract_keypoints(cbfv, fs)
-
-    plot_signals_stacked(
-        t,
-        abp,
-        cbfv,
-        abp_kp=abp_kp,
-        cbfv_kp=cbfv_kp,
-    )
-
+    plot_signals_stacked(t, abp, cbfv)

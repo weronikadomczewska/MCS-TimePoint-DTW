@@ -1,12 +1,12 @@
-import torch
+import torch #noqa
 
 
-def _patched_solve(B, A):
-    X = torch.linalg.solve(A, B)
-    return X, None
+def _patched_solve(B, A): #noqa
+    X = torch.linalg.solve(A, B) #noqa
+    return X, None #noqa
 
 
-torch.solve = _patched_solve
+torch.solve = _patched_solve #noqa
 
 
 import os
@@ -17,18 +17,15 @@ from scipy.signal import find_peaks
 from signal_generators import ABPGenerator, CBFVMaderModel, LogNormalCBFV
 from cpab import CPABWarper
 
-from scipy.signal import butter, filtfilt
-
-
-# def highpass_filter(signal, fs, cutoff=0.5, order=3):
-#     nyq = 0.5 * fs
-#     normal_cutoff = cutoff / nyq
-#     b, a = butter(order, normal_cutoff, btype="high", analog=False)
-#     return filtfilt(b, a, signal)
 
 
 def extract_keypoints(signal, fs):
-    peaks, _ = find_peaks(signal, distance=int(fs * 0.4))
+    """
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html
+    """
+    peaks, _ = find_peaks(
+        signal, distance=int(fs * 0.4), height=np.mean(signal) + 0.5 * np.std(signal)
+    )
     troughs, _ = find_peaks(-signal, distance=int(fs * 0.4))
     return np.sort(np.concatenate([peaks, troughs]))
 
@@ -236,9 +233,9 @@ def generate_cpab_dataset(
 
 if __name__ == "__main__":
     generate_cpab_dataset(
-        n_samples=22,
+        n_samples=1000,
         base_dir="dataset_synthetic_cpab",
         plot_dir="plots_dataset_synthetic_cpab",
-        fs=100,
-        duration=15,
+        fs=200,
+        duration=300,
     )
