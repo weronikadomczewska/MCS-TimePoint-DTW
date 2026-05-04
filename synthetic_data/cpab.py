@@ -1,15 +1,14 @@
-import numpy as np
-import torch
+import numpy as np  # noqa
+import torch  # noqa
 
 
-def _patched_solve(B, A):
-    X = torch.linalg.solve(A, B)
-    return X, None  # mimic old behavior (solution, LU)
+def _patched_solve(B, A):  # noqa
+    X = torch.linalg.solve(A, B)  # noqa
+    return X, None  # mimic old behavior (solution, LU) #noqa
 
 
-torch.solve = _patched_solve
-import torch.nn.functional as F
-from libcpab import Cpab
+torch.solve = _patched_solve  # noqa
+from libcpab import Cpab  # noqa
 
 """
 https://github.com/SkafteNicki/libcpab
@@ -25,7 +24,8 @@ class CPABWarper:
         """
         self.device = device
 
-        self.T = Cpab(tess_size=tess_size, backend=backend, device=device)
+        self.T = Cpab(tess_size=tess_size, device=device)
+        # self.T = Cpab(tess_size=tess_size, backend=backend, device=device)
 
     def _create_grid(self, L):
         """Create normalized grid [0,1]"""

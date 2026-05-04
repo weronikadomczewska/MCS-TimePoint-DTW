@@ -14,4 +14,4 @@ repos:
     rev: 1.8.5
     hooks:
       - id: nbqa-ruff
-        args: [--fix]
+        args: ["--ignore=E402"]

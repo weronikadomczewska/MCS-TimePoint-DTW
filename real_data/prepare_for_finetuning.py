@@ -6,6 +6,11 @@ from scipy.signal import butter, filtfilt, find_peaks
 from synthetic_data.cpab import CPABWarper
 import numpy as np
 
+# import sys
+# import os
+
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 
 def get_cbfv_channel(row):
     if row["FV_PRAWA_MCA.3"] == 1:
@@ -38,9 +43,7 @@ def extract_signals(df, cbfv_channel):
     ).values
 
     cbfv = pd.to_numeric(
-        df["fv_r" if cbfv_channel == "fv_r" else "fv_l"]
-        .astype(str)
-        .str.replace(",", "."),
+        df["fv_r" if cbfv_channel == "fv_r" else "fv_l"].astype(str).str.replace(",", "."),
         errors="coerce",
     ).values
 
@@ -141,10 +144,12 @@ for patient_dir in root.iterdir():
 
         # --- keypoints ---
         abp_kp = extract_keypoints(abp, fs)
+        cbfv_kp = extract_keypoints(cbfv, fs)
         if len(abp_kp) < 10:
             continue
+        # if len(cbfv_kp) < 10:
+        #     continue
 
-        # --- CPAB (ważne: mniejsze deformacje dla długich sygnałów) ---
         scale = np.random.uniform(0.03, 0.08)
         theta = warper.sample_theta(scale=scale)
 
@@ -152,14 +157,15 @@ for patient_dir in root.iterdir():
         cbfv_w, _ = warper.warp(cbfv, theta)
 
         abp_kp_w = warper.warp_keypoints(abp_kp, grid_t, len(abp))
+        cbfv_kp_w = warper.warp_keypoints(cbfv_kp, grid_t, len(cbfv))
 
         # --- SAVE ---
         idx = counters[tag]
         save_dir = finetuning_data_path / tag
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        path = save_dir / f"sample_{idx}.npz"
-
+        path = save_dir / f"sample_{patient_id}.npz"
+        print(f"Saving {path}...")
         np.savez_compressed(
             path,
             t=t.astype(np.float32),
@@ -169,6 +175,8 @@ for patient_dir in root.iterdir():
             cbfv_warped=cbfv_w.astype(np.float32),
             abp_kp=abp_kp.astype(np.int32),
             abp_kp_warped=abp_kp_w.astype(np.int32),
+            cbfv_kp=cbfv_kp.astype(np.int32),
+            cbfv_kp_warped=cbfv_kp_w.astype(np.int32),
             theta=theta.squeeze().cpu().numpy(),
             grid_t=grid_t.squeeze().cpu().numpy(),
             patient_id=patient_id,

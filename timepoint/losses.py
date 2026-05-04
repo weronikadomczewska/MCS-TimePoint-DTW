@@ -6,15 +6,19 @@ import torch.nn.functional as F
 
 
 class TimePointKeypointLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, pos_weight=80.0):
         super().__init__()
-        self.loss_fn = nn.BCELoss()
+        self.pos_weight = pos_weight
+        # self.loss_fn = nn.BCELoss()
 
     def forward(self, S_logits: torch.Tensor, Y_true: torch.Tensor):
         Y_true = Y_true.float()
-        S_prob = torch.sigmoid(S_logits)
+        # S_prob = torch.sigmoid(S_logits)
 
-        loss = self.loss_fn(S_prob, Y_true)
+        pos_weight = torch.tensor(self.pos_weight, device=S_logits.device)
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+        loss = loss_fn(S_logits, Y_true)
         return loss
 
 
@@ -45,14 +49,14 @@ class TimePointDescriptorLoss(nn.Module):
         # shape: [B, N, N]
         sim = torch.bmm(D, D_prime.transpose(1, 2))
 
-        # positive loss 
+        # positive loss
         pos_loss = match_mask * (F.relu(self.mp - sim) ** 2)
 
-        # negative loss 
+        # negative loss
         neg_mask = 1.0 - match_mask
         neg_loss = neg_mask * (F.relu(sim - self.mn) ** 2)
 
-        # combine 
+        # combine
         loss = pos_loss + neg_loss
 
         return loss.mean()

@@ -1,22 +1,21 @@
-import torch #noqa
-
-
-def _patched_solve(B, A): #noqa
-    X = torch.linalg.solve(A, B) #noqa
-    return X, None #noqa
-
-
-torch.solve = _patched_solve #noqa
-
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 
+import torch
+
 from signal_generators import ABPGenerator, CBFVMaderModel, LogNormalCBFV
 from cpab import CPABWarper
 
+
+# --- monkey patch (po importach) ---
+def _patched_solve(B, A):
+    X = torch.linalg.solve(A, B)
+    return X, None
+
+
+torch.solve = _patched_solve  # noqa
 
 
 def extract_keypoints(signal, fs):
@@ -24,9 +23,9 @@ def extract_keypoints(signal, fs):
     https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html
     """
     peaks, _ = find_peaks(
-        signal, distance=int(fs * 0.4), height=np.mean(signal) + 0.5 * np.std(signal)
+        signal, distance=int(fs * 0.2), height=np.mean(signal) + 0.5 * np.std(signal)
     )
-    troughs, _ = find_peaks(-signal, distance=int(fs * 0.4))
+    troughs, _ = find_peaks(-signal, distance=int(fs * 0.2))
     return np.sort(np.concatenate([peaks, troughs]))
 
 

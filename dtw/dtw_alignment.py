@@ -1,95 +1,177 @@
-from dtaidistance import dtw
-from scipy.stats import zscore
+import os
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+from dtaidistance import dtw
 
-def analyze_dtw_morphological_delay(abp_signal, cbfv_signal, fs=100):
-    # Normalisation - different units
-    abp_norm = zscore(abp_signal)
-    cbfv_norm = zscore(cbfv_signal)
-    
-    # 2. Sakoe-Chiba window DTW
-    window_size = int(0.5 * fs) 
-    
-    distance, paths = dtw.warping_paths(abp_norm, cbfv_norm, window=window_size)
-    best_path = dtw.best_path(paths)
-    
-    path_diffs = []
-    for i, j in best_path:
 
-        diff_seconds = (j - i) / fs
-        path_diffs.append(diff_seconds)
-        
-    path_diffs = np.array(path_diffs)
-    
-    mean_dtw_delay = np.mean(path_diffs)
-    std_dtw_delay = np.std(path_diffs)
-    
-    return path_diffs, mean_dtw_delay, std_dtw_delay
+# -----------------------------
+# ⚙️ CONFIG
+# -----------------------------
+BASE_PATH = "../data_for_finetuning"
+FS = 200
 
-def plot_delay_trend(window_times, mean_delays, std_delays=None, event_times=None):
-    """
-    Rysuje wykres trendu opóźnienia ABP-CBFV w trakcie dłuższego badania.
-    
-    :param window_times: Czas środka każdego analizowanego okna (oś X)
-    :param mean_delays: Średnie opóźnienie DTW dla danego okna w sekundach
-    :param std_delays: (Opcjonalnie) Odchylenie standardowe opóźnienia
-    :param event_times: (Opcjonalnie) Lista momentów (w sekundach), kiedy pacjent zmieniał pozycję (np. wstawał)
-    """
-    fig, ax = plt.subplots(figsize=(12, 5))
+EXCLUDE_FILES = {
+    "sample_PAC02.npz",
+    "sample_PAC03.npz",
+    "sample_PAC33.npz",
+    "sample_PAC38.npz",
+    "sample_PAC39.npz",
+}
 
-    ax.plot(window_times, mean_delays, marker='o', color='purple', linewidth=2, label="Średnie przesunięcie (Delay)")
 
-    if std_delays is not None:
-        ax.fill_between(window_times, 
-                        np.array(mean_delays) - np.array(std_delays), 
-                        np.array(mean_delays) + np.array(std_delays), 
-                        color='purple', alpha=0.2, label="Zmienność (Std Dev)")
+# -----------------------------
+# 🔧 CORE: compute delays per cycle
+# -----------------------------
+def compute_cycle_delays(abp, cbfv, abp_kp, fs=200):
+    delays = []
 
-    # position change events
-    if event_times:
-        for et in event_times:
-            ax.axvline(x=et, color='black', linestyle=':', alpha=0.7)
-        # Trik na dodanie tylko jednej legendy dla wszystkich linii pionowych
-        ax.axvline(x=event_times[0], color='black', linestyle=':', alpha=0.7, label="Zmiana pozycji (Sit-to-stand)")
+    print("Signal length:", len(abp))
+    print("Num keypoints:", len(abp_kp))
 
-    ax.set_title("Autoregulation assesment", fontsize=14)
-    ax.set_xlabel("Duration (s)", fontsize=12)
-    ax.set_ylabel("Delay (s)", fontsize=12)
-    
-    ax.axhline(0, color='gray', linewidth=1)
-    
-    ax.legend(loc="upper left")
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
+    for i in range(len(abp_kp) - 1):
+        start = abp_kp[i]
+        end = abp_kp[i + 1]
+
+        x = abp[start:end]
+        y = cbfv[start:end]
+
+        if len(x) < 10 or len(y) < 10:
+            continue
+
+        path = dtw.warping_path(x, y)
+
+        lags = [(j - i) / fs for i, j in path]
+
+        delays.append(np.mean(lags))
+
+    return delays
+
+
+# -----------------------------
+# 🔧 PROCESS ONE FOLDER
+# -----------------------------
+def process_split(split_name):
+    folder = os.path.join(BASE_PATH, split_name)
+    files = sorted([f for f in os.listdir(folder) if f.endswith(".npz")])
+
+    all_delays = []
+    per_file_stats = []
+
+    for f in files:
+        if f in EXCLUDE_FILES:
+            continue
+
+        path = os.path.join(folder, f)
+        data = np.load(path)
+
+        abp = data["abp"]
+        cbfv = data["cbfv"]
+        abp_kp = data["abp_kp"]
+
+        if len(abp_kp) < 5:
+            continue
+
+        delays = compute_cycle_delays(abp, cbfv, abp_kp, FS)
+
+        if len(delays) == 0:
+            continue
+
+        all_delays.extend(delays)
+
+        per_file_stats.append(
+            {
+                "file": f,
+                "mean_delay": np.mean(delays),
+                "std_delay": np.std(delays),
+                "num_cycles": len(delays),
+            }
+        )
+
+    return np.array(all_delays), pd.DataFrame(per_file_stats)
+
+
+# -----------------------------
+# 🚀 RUN
+# -----------------------------
+baseline_delays, baseline_df = process_split("baseline")
+position_delays, position_df = process_split("position")
+
+
+# -----------------------------
+# 📊 GLOBAL SUMMARY
+# -----------------------------
+print("\n=== GLOBAL RESULTS ===")
+
+print("\nBASELINE:")
+print("Mean delay:", np.mean(baseline_delays))
+print("Std delay:", np.std(baseline_delays))
+
+print("\nPOSITION:")
+print("Mean delay:", np.mean(position_delays))
+print("Std delay:", np.std(position_delays))
+
+
+# -----------------------------
+# 📊 PER-FILE SUMMARY
+# -----------------------------
+print("\n=== PER FILE (BASELINE) ===")
+print(baseline_df.head())
+
+print("\n=== PER FILE (POSITION) ===")
+print(position_df.head())
+
+
+# -----------------------------
+# 📈 HISTOGRAM
+# -----------------------------
+plt.figure(figsize=(8, 5))
+
+plt.hist(baseline_delays, bins=40, alpha=0.5, label="baseline")
+plt.hist(position_delays, bins=40, alpha=0.5, label="position")
+
+plt.xlabel("Delay (seconds)")
+plt.ylabel("Count")
+plt.title("Cycle-wise ABP → CBFV delay")
+plt.legend()
+plt.grid()
+plt.show()
+
+
+# -----------------------------
+# 📈 BOXPLOT (very good for thesis)
+# -----------------------------
+plt.figure()
+
+plt.boxplot([baseline_delays, position_delays], labels=["baseline", "position"])
+
+plt.ylabel("Delay (seconds)")
+plt.title("Delay comparison")
+plt.grid()
+plt.show()
+
+
+# -----------------------------
+# 📈 OPTIONAL: visualize one sample
+# -----------------------------
+def plot_example(path):
+    data = np.load(path)
+
+    abp = data["abp"]
+    cbfv = data["cbfv"]
+    abp_kp = data["abp_kp"]
+
+    plt.figure(figsize=(12, 4))
+    plt.plot(abp, label="ABP")
+    plt.plot(cbfv, label="CBFV")
+
+    plt.scatter(abp_kp, abp[abp_kp], s=10)
+
+    plt.legend()
+    plt.title("Example signal with cycles")
+    plt.grid()
     plt.show()
 
 
-def plot_dtw_alignment(abp_window, cbfv_window, path, fs=100, title="Wizualizacja przesunięcia DTW (Warping Path)"):
-    """
-    Rysuje dwa sygnały i szare linie łączące odpowiadające sobie punkty według ścieżki DTW.
-    """
-    time_axis = np.arange(len(abp_window)) / fs
-
-    # Normalizacja Z-score tylko do celów wizualizacji (żeby nałożyły się na jednej osi Y)
-    abp_norm = zscore(abp_window)
-    cbfv_norm = zscore(cbfv_window)
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-
-    ax.plot(time_axis, abp_norm, label='ABP (Wejście)', color='red', linewidth=2)
-    ax.plot(time_axis, cbfv_norm, label='CBFV (Wyjście)', color='blue', linewidth=2)
-
-    for i, j in path[::3]:
-        ax.plot([time_axis[i], time_axis[j]], [abp_norm[i], cbfv_norm[j]], 
-                color='gray', linestyle='--', alpha=0.4)
-
-    ax.set_title(title, fontsize=14)
-    ax.set_xlabel("Czas (s)", fontsize=12)
-    ax.set_ylabel("Znormalizowana Amplituda (Z-score)", fontsize=12)
-    ax.legend(loc="upper right")
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.show()
+# example usage:
+# plot_example("../finetuning_data/baseline/sample_0.npz")
