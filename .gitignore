@@ -231,3 +231,5 @@ dataset_synthetic_cpab_short/
 plots_dataset_synthetic_cpab/
 
 checkpoints/
+
+weights/

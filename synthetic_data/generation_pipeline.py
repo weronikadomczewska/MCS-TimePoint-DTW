@@ -100,13 +100,13 @@ def generate_cpab_dataset(
     # =========================
     # GENERATORY
     # =========================
-    abp_gen = ABPGenerator(fs=fs)
     mader = CBFVMaderModel()
     lognorm = LogNormalCBFV(fs)
 
     warper = CPABWarper(tess_size=[16])
 
     for i in range(n_samples):
+        abp_gen = ABPGenerator(fs=fs)
         # =========================
         # 1. ABP
         # =========================
@@ -236,5 +236,5 @@ if __name__ == "__main__":
         base_dir="dataset_synthetic_cpab",
         plot_dir="plots_dataset_synthetic_cpab",
         fs=200,
-        duration=300,
+        duration=10,
     )
